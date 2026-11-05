@@ -3,7 +3,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
-const PKG = path.join(HERE, "..");
+// Tests live in <package>/test, so the package under test is one level up.
+const PKG = path.dirname(HERE);
 const at = (relative) => pathToFileURL(path.join(PKG, relative)).href;
 
 const { Config } = await import(at("lib/config.js"));
@@ -43,7 +44,8 @@ const schemaText = JSON.stringify(schemaJson);
 for (const field of [
   "enabled", "concurrencyDelegate", "listDetail", "staticNotice", "guardFallback",
   "interceptDirectCalls", "families", "unknownOwnerPolicy", "alwaysExpose",
-  "alwaysHide", "gatewayPrefix", "ptcMode", "freeze",
+  "alwaysHide", "gatewayPrefix", "ptcMode", "freeze", "builtinFamilies",
+  "promptDisclosure", "promptPlugins",
 ]) {
   assert.ok(schemaText.includes(`"${field}"`), `config schema is missing ${field}`);
 }
@@ -55,9 +57,22 @@ console.log("OK config —", volatileCount, "volatile fields");
 // ——— 2. Family table & frozen surface ————————————————————————————
 const families = fam.resolveFamilies({});
 assert.deepEqual(Object.keys(families).sort(), [
-  "blender", "github", "hindsight", "image", "mcp", "mcp_servers", "search", "video",
+  "blender", "github", "hindsight", "image", "mcp", "mcp_servers", "schedule", "search", "session", "video",
 ]);
 assert.deepEqual(families.mcp_servers.prefixes, ["mcp__"]);
+assert.equal(families.session.builtin, true, "session is a builtin family");
+assert.deepEqual(families.session.tools, [
+  "session_search", "session_event_search", "session_event_read", "session_event_trace", "session_trace",
+]);
+// The group switch gates every builtin family independently of its own switch.
+assert.equal(fam.resolveFamilies({}, { builtinEnabled: false }).session.enabled, false);
+assert.equal(fam.resolveFamilies({}, { builtinEnabled: false }).blender.enabled, true);
+assert.equal(fam.resolveFamilies({ session: { enabled: false } }).session.enabled, false);
+assert.equal(fam.resolveFamilies({ session: { enabled: false } }).schedule.enabled, true);
+// Builtin members are no longer unconditionally resident.
+assert.equal(fam.isKeepTool("session_search"), false, "session_search is collapsible");
+assert.equal(fam.isKeepTool("schedule_create"), false, "schedule_create is collapsible");
+assert.equal(fam.isKeepTool("workflow"), true, "but the rest of core still stays");
 
 const ownerOf = (name) => {
   if (name.startsWith("mcp__")) return "mcp:server";

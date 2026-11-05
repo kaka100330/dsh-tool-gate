@@ -1,20 +1,24 @@
 # dsh-tool-gate — 渐进披露（工具网关）
 #
-# 把第三方工具按家族收进 8 个固定网关工具，使 wire 上的 tools 数组逐字节恒定，
-# 从而不再因为「工具定义变了」而重付整段提示前缀。
+# 把第三方工具与低频内置工具按家族收进各自的网关工具，使 wire 上的 tools 数组
+# 逐字节恒定，从而不再因为「工具定义变了」而重付整段提示前缀。
 #
 # 默认 enabled: false —— 装好但不动任何东西。确认自己需要省这 2 万 token 后，
 # 在 设置 → 插件 → 工具网关 里打开开关（或把下面的 enabled 改成 true）。
 #
-# families 是归属表：包名精确匹配 package.json 的 name；prefixes 是工具名前缀。
-# 改这里等于改「哪些工具被收起」；留空某家族的 packages/prefixes 会回落到内置默认表。
+# families 是归属表：包名精确匹配 package.json 的 name；prefixes 是工具名前缀；
+# 内置家族的 tools 是显式成员名单。改这里等于改「哪些工具被收起」；
+# 留空某家族的 packages/prefixes/tools 会回落到内置默认表。
+#
+# 提示词披露（promptDisclosure / promptPlugins）默认全关：开启后，已折叠家族的
+# 插件提示词不再每轮注入，改为在该家族 action=list 时随成员定义返回。
 - insert:
     - id: dsh-tool-gate
       name: dsh-tool-gate
       config:
         enabled: false
 
-        # ——— 设置页四个开关（也是下面这些的默认值）———————————————
+        # ——— 设置页开关（也是下面这些的默认值）——————————————————
         # 网关调用是否沿用成员自身的并发安全声明。保守起见默认关闭（串行）。
         concurrencyDelegate: false
         # action=list 返回成员的完整参数定义。关掉更省 token，但模型可能要试一轮。
@@ -26,6 +30,13 @@
 
         # 模型直接调用已收起工具时，拦截并提示改走网关。
         interceptDirectCalls: true
+
+        # 内置工具家族（会话检索、日程）是否也折叠。默认开启。
+        builtinFamilies: true
+
+        # 提示词披露：总开关默认关闭；promptPlugins 里逐插件开启（key = 包名）。
+        promptDisclosure: false
+        promptPlugins: {}
 
         # 认不出归属的工具：expose = 留在 wire 上（安全）；collapse = 一并收起（省得多）。
         unknownOwnerPolicy: expose
@@ -93,3 +104,17 @@
             enabled: true
             packages: ["@vectorize-io/hindsight-coding-agents"]
             prefixes: []
+          session:
+            label: 会话检索
+            description: 检索与追踪历史会话、事件与脉络
+            enabled: true
+            packages: ["@deepseek-ai/dsh-tool-session-query"]
+            prefixes: []
+            tools: [session_search, session_event_search, session_event_read, session_event_trace, session_trace]
+          schedule:
+            label: 日程
+            description: 创建、列出、修改、删除定时提醒
+            enabled: true
+            packages: ["@deepseek-ai/dsh-tool-schedule"]
+            prefixes: []
+            tools: [schedule_create, schedule_list, schedule_update, schedule_delete]

@@ -1,15 +1,18 @@
 {
   "name": "dsh-tool-gate",
-  "version": "0.1.0",
-  "description": "Progressive disclosure for DSH tools: collapse third-party tool families behind 8 stable gateway tools so the wire tool array stays byte-identical across turns (zero prefix-cache re-pay).",
+  "version": "0.3.1",
+  "description": "按家族收起第三方工具并用网关按需披露；内置工具家族、逐插件提示词披露、自建设置页",
   "keywords": [
+    "builtin-families",
+    "cache",
+    "context",
+    "deepseek-harness",
     "dsh",
     "dsh-plugin",
-    "deepseek-harness",
-    "tools",
     "progressive-disclosure",
-    "context",
-    "cache"
+    "prompt-disclosure",
+    "prompt-withholding",
+    "tools"
   ],
   "license": "MIT",
   "author": "kaka100330",
@@ -33,7 +36,11 @@
     "cordis.patch.yml",
     "locale/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/gen-prompt-attribution.mjs",
+    "scripts/gen-attribution.mjs",
+    "test/",
+    "data/"
   ],
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.5"
