@@ -1,0 +1,95 @@
+# dsh-tool-gate — 渐进披露（工具网关）
+#
+# 把第三方工具按家族收进 8 个固定网关工具，使 wire 上的 tools 数组逐字节恒定，
+# 从而不再因为「工具定义变了」而重付整段提示前缀。
+#
+# 默认 enabled: false —— 装好但不动任何东西。确认自己需要省这 2 万 token 后，
+# 在 设置 → 插件 → 工具网关 里打开开关（或把下面的 enabled 改成 true）。
+#
+# families 是归属表：包名精确匹配 package.json 的 name；prefixes 是工具名前缀。
+# 改这里等于改「哪些工具被收起」；留空某家族的 packages/prefixes 会回落到内置默认表。
+- insert:
+    - id: dsh-tool-gate
+      name: dsh-tool-gate
+      config:
+        enabled: false
+
+        # ——— 设置页四个开关（也是下面这些的默认值）———————————————
+        # 网关调用是否沿用成员自身的并发安全声明。保守起见默认关闭（串行）。
+        concurrencyDelegate: false
+        # action=list 返回成员的完整参数定义。关掉更省 token，但模型可能要试一轮。
+        listDetail: true
+        # 在系统提示里加一句「这些工具已收进网关」的固定说明。
+        staticNotice: true
+        # 额外挂一道 tools.guard 拦住绕过网关的直呼（monotonic，不改工具集）。
+        guardFallback: true
+
+        # 模型直接调用已收起工具时，拦截并提示改走网关。
+        interceptDirectCalls: true
+
+        # 认不出归属的工具：expose = 留在 wire 上（安全）；collapse = 一并收起（省得多）。
+        unknownOwnerPolicy: expose
+
+        # 网关工具名前缀，留空则直接用家族名：blender / mcp / github / …
+        gatewayPrefix: ""
+
+        # 检测到 PTC（run_code）呈现模式时的行为：disable = 整体停用（推荐）。
+        ptcMode: disable
+
+        # 会话内冻结工具集。关掉会每轮重算，重新触发前缀重写，失去本插件意义。
+        freeze: true
+
+        # 强制常驻 / 强制收起（按工具名，与归属无关）
+        alwaysExpose: []
+        alwaysHide: []
+
+        # ——— 家族（默认同内置表，改这里即可调整归属）—————————————
+        families:
+          blender:
+            label: Blender
+            description: Blender 3D 建模、渲染、QC 与交付
+            enabled: true
+            packages: [dsh-blender-plugin]
+            prefixes: []
+          mcp:
+            label: MCP 管理
+            description: MCP 连接器管理：目录、连接、策略、工具
+            enabled: true
+            packages: [dsh-mcp-connector]
+            prefixes: []
+          mcp_servers:
+            label: MCP 服务器
+            description: 已连接 MCP 服务器暴露的工具
+            enabled: true
+            packages: []
+            prefixes: ["mcp__"]
+          github:
+            label: GitHub
+            description: GitHub 仓库、issue、PR 与评审
+            enabled: true
+            packages: ["@perrylink/dsh-github"]
+            prefixes: []
+          image:
+            label: 图像
+            description: 图像生成与编辑
+            enabled: true
+            packages: [dsh-image-gen]
+            prefixes: []
+          video:
+            label: 视频
+            description: 视频分镜、探测与字幕
+            enabled: true
+            packages: [dsh-video-storyboard]
+            prefixes: []
+          search:
+            label: 搜索
+            description: 网页、平台与域名搜索
+            enabled: true
+            packages: [dsh-free-search]
+            prefixes: []
+          hindsight:
+            label: 记忆
+            description: 仓库记忆：知识页、捕获、召回
+            enabled: true
+            packages: ["@vectorize-io/hindsight-coding-agents"]
+            prefixes: []

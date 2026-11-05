@@ -1,0 +1,7 @@
+node_modules/
+*.log
+dist/
+.DS_Store
+Thumbs.db
+cordis.patch.yml.bak*
+*.local.yml

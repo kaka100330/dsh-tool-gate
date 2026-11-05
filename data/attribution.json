@@ -1,0 +1,566 @@
+{
+ "acp_status": [
+  "third",
+  "billion-context"
+ ],
+ "advanced_search": [
+  "third",
+  "dsh-free-search"
+ ],
+ "ask_user_question": [
+  "core",
+  "dsh-tool-ask-user"
+ ],
+ "blender_rt_cmd": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_commands": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_do": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_headless": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_job": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_loop": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_opt": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_perf": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_plan": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_preset": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_see": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_txn": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_watch": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_rt_worker": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "blender_viewport": [
+  "third",
+  "dsh-blender-plugin"
+ ],
+ "cache_search": [
+  "third",
+  "dsh-free-search"
+ ],
+ "canvas_state": [
+  "third",
+  "dsh-image-gen"
+ ],
+ "compress": [
+  "third",
+  "billion-context"
+ ],
+ "cordis_inspect_list": [
+  "core",
+  "dsh-tool-cordis"
+ ],
+ "cordis_inspect_query": [
+  "core",
+  "dsh-tool-cordis"
+ ],
+ "create_goal": [
+  "core",
+  "dsh-tool-goal"
+ ],
+ "decompress": [
+  "third",
+  "billion-context"
+ ],
+ "domain_search": [
+  "third",
+  "dsh-free-search"
+ ],
+ "edit": [
+  "core",
+  "dsh-tool-fs"
+ ],
+ "edit_image": [
+  "third",
+  "dsh-image-gen"
+ ],
+ "find_inspiration": [
+  "third",
+  "dsh-image-gen"
+ ],
+ "free_search_test": [
+  "third",
+  "dsh-free-search"
+ ],
+ "generate_image": [
+  "third",
+  "dsh-image-gen"
+ ],
+ "generate_images": [
+  "third",
+  "dsh-image-gen"
+ ],
+ "get_goal": [
+  "core",
+  "dsh-tool-goal"
+ ],
+ "gh_checks": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "gh_file": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "gh_issue": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "gh_repo": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "gh_repo_search": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "gh_review": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "gh_search": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "hindsight_capture_initiative": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_diagnose": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_ingest_document": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_list_knowledge_pages": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_read_knowledge_page": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_reflect": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_search_knowledge_pages": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "hindsight_sync_status": [
+  "third",
+  "@vectorize-io/hindsight-coding-agents"
+ ],
+ "issue_close": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "issue_comment": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "issue_open": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "job_kill": [
+  "core",
+  "dsh-tool-jobs"
+ ],
+ "job_list": [
+  "core",
+  "dsh-tool-jobs"
+ ],
+ "job_output": [
+  "core",
+  "dsh-tool-jobs"
+ ],
+ "list_mcp_resource_templates": [
+  "core",
+  "dsh-mcp-resources"
+ ],
+ "list_mcp_resources": [
+  "core",
+  "dsh-mcp-resources"
+ ],
+ "load_workspace_dependencies": [
+  "core",
+  "dsh-tool-workspace-dependencies"
+ ],
+ "mcp_connector_catalog": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_configure": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_connect": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_disconnect": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_export_config": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_get_editable_config": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_health_check": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_import_json": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_install_from_url": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_migrate_legacy": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_migration_preview": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_policy": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_publish": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_reconfigure": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_reconnect": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_refresh_catalog": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_rename": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_scope": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_session_tools": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_set_enabled": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_snapshot": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_status": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_tool_detail": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_tool_search": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "mcp_connector_tools_list": [
+  "third",
+  "dsh-mcp-connector"
+ ],
+ "multi_search": [
+  "third",
+  "dsh-free-search"
+ ],
+ "platform_search": [
+  "third",
+  "dsh-free-search"
+ ],
+ "plugin_manager": [
+  "core",
+  "dsh-plugin-manager"
+ ],
+ "pr_create": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "pr_merge": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "pr_update": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "present": [
+  "core",
+  "dsh-tool-present"
+ ],
+ "read_image": [
+  "core",
+  "dsh-tool-fs"
+ ],
+ "read_mcp_resource": [
+  "core",
+  "dsh-mcp-resources"
+ ],
+ "research": [
+  "third",
+  "dsh-free-search"
+ ],
+ "review_post": [
+  "third",
+  "@perrylink/dsh-github"
+ ],
+ "schedule_create": [
+  "core",
+  "dsh-tool-schedule"
+ ],
+ "schedule_delete": [
+  "core",
+  "dsh-tool-schedule"
+ ],
+ "schedule_list": [
+  "core",
+  "dsh-tool-schedule"
+ ],
+ "schedule_update": [
+  "core",
+  "dsh-tool-schedule"
+ ],
+ "search_context": [
+  "third",
+  "billion-context"
+ ],
+ "session_event_read": [
+  "core",
+  "dsh-tool-session-query"
+ ],
+ "session_event_search": [
+  "core",
+  "dsh-tool-session-query"
+ ],
+ "session_event_trace": [
+  "core",
+  "dsh-tool-session-query"
+ ],
+ "session_search": [
+  "core",
+  "dsh-tool-session-query"
+ ],
+ "session_trace": [
+  "core",
+  "dsh-tool-session-query"
+ ],
+ "skill": [
+  "core",
+  "dsh-tool-skill"
+ ],
+ "terminal_close": [
+  "core",
+  "dsh-tool-terminal"
+ ],
+ "terminal_list": [
+  "core",
+  "dsh-tool-terminal"
+ ],
+ "terminal_open": [
+  "core",
+  "dsh-tool-terminal"
+ ],
+ "terminal_read": [
+  "core",
+  "dsh-tool-terminal"
+ ],
+ "terminal_send": [
+  "core",
+  "dsh-tool-terminal"
+ ],
+ "terminal_signal": [
+  "core",
+  "dsh-tool-terminal"
+ ],
+ "todo_write": [
+  "core",
+  "dsh-tool-todo"
+ ],
+ "update_goal": [
+  "core",
+  "dsh-tool-goal"
+ ],
+ "video_search": [
+  "third",
+  "dsh-free-search"
+ ],
+ "video_subtitles": [
+  "third",
+  "dsh-video-storyboard"
+ ],
+ "view_canvas": [
+  "third",
+  "dsh-image-gen"
+ ],
+ "weather": [
+  "third",
+  "dsh-free-search"
+ ],
+ "web_fetch": [
+  "core",
+  "dsh-tool-web"
+ ],
+ "web_search": [
+  "core",
+  "dsh-tool-web"
+ ],
+ "working_directory": [
+  "core",
+  "dsh-tool-working-directory"
+ ],
+ "write": [
+  "core",
+  "dsh-tool-fs"
+ ],
+ "acp_cache": [
+  "third",
+  "billion-context"
+ ],
+ "exit_plan_mode": [
+  "core",
+  "dsh-tool-plan"
+ ],
+ "interrupt_agent": [
+  "core",
+  "dsh-tool-subagent-control"
+ ],
+ "list_agents": [
+  "core",
+  "dsh-tool-subagent-control"
+ ],
+ "mcp__wincu__windows_computer_use_tools": [
+  "mcpdyn",
+  "MCP-Server"
+ ],
+ "ops_bash": [
+  "third",
+  "dsh-ops"
+ ],
+ "ops_discover_tools": [
+  "third",
+  "dsh-ops"
+ ],
+ "ops_glob": [
+  "third",
+  "dsh-ops"
+ ],
+ "ops_grep": [
+  "third",
+  "dsh-ops"
+ ],
+ "ops_inspect_local_file": [
+  "third",
+  "dsh-ops"
+ ],
+ "ops_read_files": [
+  "third",
+  "dsh-ops"
+ ],
+ "ops_result": [
+  "third",
+  "dsh-ops"
+ ],
+ "send_message": [
+  "core",
+  "dsh-tool-subagent-control"
+ ],
+ "subagent": [
+  "core",
+  "dsh-tool-subagent"
+ ],
+ "subagent_fork": [
+  "core",
+  "dsh-tool-subagent"
+ ],
+ "video_locate": [
+  "third",
+  "dsh-video-storyboard"
+ ],
+ "video_probe": [
+  "third",
+  "dsh-video-storyboard"
+ ],
+ "video_storyboard": [
+  "third",
+  "dsh-video-storyboard"
+ ],
+ "video_storyboard_settings": [
+  "third",
+  "dsh-video-storyboard"
+ ],
+ "video_zoom": [
+  "third",
+  "dsh-video-storyboard"
+ ],
+ "workflow": [
+  "core",
+  "dsh-tool-workflow"
+ ]
+}
