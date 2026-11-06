@@ -31,8 +31,13 @@
         # 模型直接调用已收起工具时，拦截并提示改走网关。
         interceptDirectCalls: true
 
-        # 内置工具家族（会话检索、日程）是否也折叠。默认开启。
+        # 内置工具家族（会话检索、日程等第一方工具）是否也折叠。默认开启。
+        # 关掉后它们常驻 wire，第一方工具不再自动成族。
         builtinFamilies: true
+
+        # 自动成族：每个第三方插件包自动成为一个家族。默认开启。
+        # 关掉后只有下面 families 里显式点名的项会折叠（完全手动模式）。
+        autoFamilies: true
 
         # 提示词披露：总开关默认关闭；promptPlugins 里逐插件开启（key = 包名）。
         promptDisclosure: false
@@ -54,67 +59,23 @@
         alwaysExpose: []
         alwaysHide: []
 
-        # ——— 家族（默认同内置表，改这里即可调整归属）—————————————
-        families:
-          blender:
-            label: Blender
-            description: Blender 3D 建模、渲染、QC 与交付
-            enabled: true
-            packages: [dsh-blender-plugin]
-            prefixes: []
-          mcp:
-            label: MCP 管理
-            description: MCP 连接器管理：目录、连接、策略、工具
-            enabled: true
-            packages: [dsh-mcp-connector]
-            prefixes: []
-          mcp_servers:
-            label: MCP 服务器
-            description: 已连接 MCP 服务器暴露的工具
-            enabled: true
-            packages: []
-            prefixes: ["mcp__"]
-          github:
-            label: GitHub
-            description: GitHub 仓库、issue、PR 与评审
-            enabled: true
-            packages: ["@perrylink/dsh-github"]
-            prefixes: []
-          image:
-            label: 图像
-            description: 图像生成与编辑
-            enabled: true
-            packages: [dsh-image-gen]
-            prefixes: []
-          video:
-            label: 视频
-            description: 视频分镜、探测与字幕
-            enabled: true
-            packages: [dsh-video-storyboard]
-            prefixes: []
-          search:
-            label: 搜索
-            description: 网页、平台与域名搜索
-            enabled: true
-            packages: [dsh-free-search]
-            prefixes: []
-          hindsight:
-            label: 记忆
-            description: 仓库记忆：知识页、捕获、召回
-            enabled: true
-            packages: ["@vectorize-io/hindsight-coding-agents"]
-            prefixes: []
-          session:
-            label: 会话检索
-            description: 检索与追踪历史会话、事件与脉络
-            enabled: true
-            packages: ["@deepseek-ai/dsh-tool-session-query"]
-            prefixes: []
-            tools: [session_search, session_event_search, session_event_read, session_event_trace, session_trace]
-          schedule:
-            label: 日程
-            description: 创建、列出、修改、删除定时提醒
-            enabled: true
-            packages: ["@deepseek-ai/dsh-tool-schedule"]
-            prefixes: []
-            tools: [schedule_create, schedule_list, schedule_update, schedule_delete]
+        # ——— 家族覆盖（全部可选，留空即自动）———————————————————————
+        # 家族不需要在这里登记。每个第三方插件包会自动成为一个家族，成员由
+        # 「谁注册了这个工具」推导，家族 id 由包名推导；装新插件、重载一次即可生效。
+        #
+        # 这里只写「要改默认行为」的项，可选字段：
+        #   enabled: false        这个家族不折叠（成员直接常驻 wire，网关消失）
+        #   label / description   改设置页上显示的名字
+        #   gateway               改网关工具名（默认 = 家族 id）
+        #   packages: [pkg, ...]  把几个包合并成一个家族（被合并的自动家族会消失）
+        #   tools: [name, ...]    显式点名成员，用于从一个包里只挑几个工具
+        #   prefixes: ["mcp__"]   按工具名前缀归族
+        #
+        # 例：
+        #   families:
+        #     mcp_connector:
+        #       gateway: mcp
+        #     my-combo:
+        #       label: 我的组合
+        #       packages: [dsh-image-gen, dsh-video-storyboard]
+        families: {}

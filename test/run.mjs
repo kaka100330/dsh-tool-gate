@@ -54,40 +54,50 @@ assert.ok(volatileCount >= 12, `expected >=12 volatile fields, saw ${volatileCou
 assert.ok(schemaText.includes("总开关"), "descriptions must survive into the schema");
 console.log("OK config —", volatileCount, "volatile fields");
 
-// ——— 2. Family table & frozen surface ————————————————————————————
-const families = fam.resolveFamilies({});
+// ——— 2. Family discovery & frozen surface ————————————————————————
+// Membership is DERIVED from the registry: one package is one family. Nothing
+// here enumerates a plugin, which is the whole point — a plugin installed after
+// this file was written still collapses.
+const owners = {
+  blender_rt_do: "dsh-blender-plugin",
+  gh_repo: "@perrylink/dsh-github",
+  generate_image: "dsh-image-gen",
+  mcp__x__y: "mcp:server",
+  session_search: "@deepseek-ai/dsh-tool-session-query",
+  schedule_create: "@deepseek-ai/dsh-tool-schedule",
+  mystery_tool: "some-future-plugin",
+};
+const families = fam.resolveFamilies({}, { owners });
 assert.deepEqual(Object.keys(families).sort(), [
-  "blender", "github", "hindsight", "image", "mcp", "mcp_servers", "schedule", "search", "session", "video",
+  "blender_plugin", "github", "image_gen", "mcp_servers", "schedule", "session_query",
+  "some_future_plugin",
 ]);
 assert.deepEqual(families.mcp_servers.prefixes, ["mcp__"]);
-assert.equal(families.session.builtin, true, "session is a builtin family");
-assert.deepEqual(families.session.tools, [
-  "session_search", "session_event_search", "session_event_read", "session_event_trace", "session_trace",
-]);
-// The group switch gates every builtin family independently of its own switch.
-assert.equal(fam.resolveFamilies({}, { builtinEnabled: false }).session.enabled, false);
-assert.equal(fam.resolveFamilies({}, { builtinEnabled: false }).blender.enabled, true);
-assert.equal(fam.resolveFamilies({ session: { enabled: false } }).session.enabled, false);
-assert.equal(fam.resolveFamilies({ session: { enabled: false } }).schedule.enabled, true);
+assert.equal(families.session_query.builtin, true, "first-party packages are builtin");
+assert.equal(families.blender_plugin.builtin, false, "third-party packages are not");
+assert.equal(families.session_query.gateway, "session", "a label hint may shorten the gateway name");
+// The group switch gates every first-party family independently of its own switch.
+assert.equal(fam.resolveFamilies({}, { owners, builtinEnabled: false }).session_query, undefined);
+assert.equal(fam.resolveFamilies({}, { owners, builtinEnabled: false }).blender_plugin.enabled, true);
+assert.equal(fam.resolveFamilies({ session_query: { enabled: false } }, { owners }).session_query.enabled, false);
+assert.equal(fam.resolveFamilies({ session_query: { enabled: false } }, { owners }).schedule.enabled, true);
+// autoFamilies: false derives nothing at all.
+assert.deepEqual(Object.keys(fam.resolveFamilies({}, { owners, auto: false })), []);
 // Builtin members are no longer unconditionally resident.
 assert.equal(fam.isKeepTool("session_search"), false, "session_search is collapsible");
 assert.equal(fam.isKeepTool("schedule_create"), false, "schedule_create is collapsible");
 assert.equal(fam.isKeepTool("workflow"), true, "but the rest of core still stays");
 
-const ownerOf = (name) => {
-  if (name.startsWith("mcp__")) return "mcp:server";
-  if (name.startsWith("blender_")) return "dsh-blender-plugin";
-  if (name.startsWith("gh_")) return "@perrylink/dsh-github";
-  if (name === "generate_image") return "dsh-image-gen";
-  return undefined;
-};
-const resolver = fam.createFamilyResolver(families, ownerOf);
-assert.equal(resolver.familyOf("blender_rt_do"), "blender");
+const ownerOf = (name) => owners[name];
+const gatewayFor = (id) => families[id]?.gateway ?? id;
+const resolver = fam.createFamilyResolver(families, ownerOf, gatewayFor);
+assert.equal(resolver.familyOf("blender_rt_do"), "blender_plugin");
 assert.equal(resolver.familyOf("mcp__x__y"), "mcp_servers");
 assert.equal(resolver.familyOf("gh_repo"), "github");
-assert.equal(resolver.familyOf("generate_image"), "image");
+assert.equal(resolver.familyOf("generate_image"), "image_gen");
+assert.equal(resolver.familyOf("mystery_tool"), "some_future_plugin", "an unseen plugin collapses with zero config");
 assert.equal(resolver.familyOf("workflow"), undefined);
-assert.equal(resolver.familyOf("blender"), undefined, "gateway names are never members");
+assert.equal(resolver.familyOf("blender_plugin"), undefined, "gateway names are never members");
 
 const tools = [
   { name: "workflow", description: "x", parameters: {} },
@@ -97,8 +107,10 @@ const tools = [
   { name: "gh_repo", description: "x", parameters: {} },
   { name: "generate_image", description: "x", parameters: {} },
   { name: "mcp__x__y", description: "x", parameters: {} },
-  { name: "mystery_tool", description: "x", parameters: {} },
+  { name: "session_search", description: "x", parameters: {} },
+  { name: "unknown_tool", description: "x", parameters: {} },
   { name: "blender", description: "gateway", parameters: {} },
+  { name: "blender_plugin", description: "gateway", parameters: {} },
 ];
 const surface = (extra = {}) => fam.buildFrozenSurface(tools, {
   familyOf: resolver.familyOf,
@@ -106,38 +118,42 @@ const surface = (extra = {}) => fam.buildFrozenSurface(tools, {
   alwaysExpose: [],
   alwaysHide: [],
   unknownOwnerPolicy: "expose",
-  keepNames: new Set(["blender"]),
+  keepNames: new Set(["blender", "blender_plugin"]),
   ...extra,
 });
 
 const built = surface();
 assert.deepEqual(
   built.tools.map((t) => t.name),
-  ["blender", "compress", "mystery_tool", "ops_bash", "workflow"],
-  "core + ops + context + gateways + unknown-owner stay; family members collapse",
+  ["blender", "blender_plugin", "compress", "ops_bash", "unknown_tool", "workflow"],
+  "resident + gateways + unknown-owner stay; every family member collapses",
 );
 assert.deepEqual(
   [...built.collapsed].sort(),
-  ["blender_rt_do", "generate_image", "gh_repo", "mcp__x__y"],
+  ["blender_rt_do", "generate_image", "gh_repo", "mcp__x__y", "session_search"],
 );
 assert.equal(JSON.stringify(surface().tools), JSON.stringify(built.tools), "surface is byte-stable");
 
 const collapsedUnknown = surface({ unknownOwnerPolicy: "collapse" });
-assert.ok(collapsedUnknown.collapsed.includes("mystery_tool"));
-assert.ok(!collapsedUnknown.tools.some((t) => t.name === "mystery_tool"));
+assert.ok(collapsedUnknown.collapsed.includes("unknown_tool"));
+assert.ok(!collapsedUnknown.tools.some((t) => t.name === "unknown_tool"));
 
 const forced = surface({ alwaysExpose: ["gh_repo"], alwaysHide: ["workflow"] });
 assert.ok(forced.tools.some((t) => t.name === "gh_repo"), "alwaysExpose wins");
 assert.ok(!forced.tools.some((t) => t.name === "workflow"), "alwaysHide wins");
 
-const gatedFamilies = fam.resolveFamilies({ blender: { enabled: false } });
+const gatedFamilies = fam.resolveFamilies({ blender_plugin: { enabled: false } }, { owners });
 const withDisabled = fam.buildFrozenSurface(tools, {
-  familyOf: fam.createFamilyResolver(gatedFamilies, ownerOf).familyOf,
+  familyOf: fam.createFamilyResolver(
+    gatedFamilies,
+    ownerOf,
+    (id) => gatedFamilies[id]?.gateway ?? id,
+  ).familyOf,
   families: gatedFamilies,
   alwaysExpose: [],
   alwaysHide: [],
   unknownOwnerPolicy: "expose",
-  keepNames: new Set(["blender"]),
+  keepNames: new Set(["blender", "blender_plugin"]),
 });
 assert.ok(withDisabled.tools.some((t) => t.name === "blender_rt_do"), "disabled family is not collapsed");
 console.log("OK families");
@@ -173,11 +189,11 @@ const runtime = {
   families: () => families,
   stateFor: (agent) => states.ensure(agent),
   familyOf: (name) => resolver.familyOf(name),
-  gatewayNameFor: (id) => fam.gatewayName("", id),
+  gatewayNameFor: (id) => fam.gatewayName("", id, families[id]?.gateway),
   labelFor: (id) => families[id]?.label || id,
 };
 
-const gateway = createGateway({ family: families.blender, name: "blender", runtime });
+const gateway = createGateway({ family: families.blender_plugin, name: "blender", runtime });
 assert.equal(gateway.name, "blender");
 assert.equal(typeof gateway.execute, "function");
 assert.equal(typeof gateway.output.render, "function");
@@ -266,5 +282,34 @@ assert.deepEqual(row.names, ["a", "b"]);
 assert.deepEqual(row.collapsed, ["collapsed-a"]);
 assert.equal(agentRowOf(record, "zzz"), undefined);
 console.log("OK gate record");
+
+// ——— framework packages are infrastructure, not plugins ———————————————
+// `@deepseek-ai/cordis` is the DI framework itself: a tool registered from inside
+// one of its effects walks through framework frames, so the nearest package.json
+// can be the framework. Treating that as an owner invents a family named after the
+// framework and fills it with tools that are on the wire unconditionally — a
+// gateway with nothing behind it. `owner.js` skips those frames while walking.
+{
+  const { deriveFamilies } = await import(at("lib/discovery.js"));
+  const families = deriveFamilies({
+    owners: {
+      ask_user_question: "@deepseek-ai/cordis",
+      todo_write: "@deepseek-ai/cordis",
+      cordis_inspect_list: "@deepseek-ai/dsh-tool-cordis",
+      some_optional_tool: "dsh-real-plugin",
+    },
+  });
+  assert.equal(
+    families.cordis,
+    undefined,
+    "a package whose tools are all resident defines no family, hence no empty gateway",
+  );
+  assert.ok(
+    Object.values(families).some((family) => family.packages.includes("dsh-real-plugin")),
+    "a package that owns an optional tool still becomes a family",
+  );
+  console.log("OK framework packages do not become families");
+}
+
 
 console.log("\nALL CHECKS PASSED");

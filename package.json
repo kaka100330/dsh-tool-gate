@@ -1,7 +1,7 @@
 {
   "name": "dsh-tool-gate",
-  "version": "0.3.1",
-  "description": "按家族收起第三方工具并用网关按需披露；内置工具家族、逐插件提示词披露、自建设置页",
+  "version": "0.4.0",
+  "description": "渐进披露工具网关：按插件包自动成族，把不常用工具收进按需查询的网关，并可按插件披露提示词",
   "keywords": [
     "builtin-families",
     "cache",

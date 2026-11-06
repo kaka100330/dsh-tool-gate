@@ -12,8 +12,12 @@
  *  - `tools.guard` is the monotonic denial list.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { forgetScanCache } from "../lib/tool-scan.js";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
 // Tests live in <package>/test, so the package under test is one level up.
@@ -75,11 +79,49 @@ function createHost(options = {}) {
   };
 
   const toolsService = {
+    /**
+     * The host exposes its layer stacks as `tools.layers`, and tool attribution
+     * walks `layers.global.tools.entries()` to learn what was registered *before*
+     * this plugin mounted (the common case: we are the last bundle). A fake
+     * without it silently loses every pre-existing tool, so it is mirrored here.
+     */
+    layers: {
+      get global() {
+        return {
+          tools: {
+            entries: () => tools.entries(),
+            values: () => tools.values(),
+          },
+        };
+      },
+    },
     register(definition) {
       if (tools.has(definition.name)) throw new Error(`duplicate tool ${definition.name}`);
       tools.set(definition.name, definition);
       return () => {
         if (tools.get(definition.name) === definition) tools.delete(definition.name);
+      };
+    },
+    /**
+     * Register into one agent's layer instead of the global one.
+     *
+     * Still funnels through `register()` on purpose: on the host a scoped
+     * registration is an ordinary `register` call made on a scoped context, so
+     * attribution sees it and family discovery counts it. Only *visibility* is
+     * narrowed, which is what the schedule bundle relies on.
+     */
+    registerScoped(definition, agent) {
+      const dispose = this.register(definition);
+      tools.delete(definition.name);
+      let layer = scopedTools.get(agent);
+      if (layer === undefined) {
+        layer = new Map();
+        scopedTools.set(agent, layer);
+      }
+      layer.set(definition.name, definition);
+      return () => {
+        layer.delete(definition.name);
+        dispose();
       };
     },
     get(name) {
@@ -203,6 +245,10 @@ function createHost(options = {}) {
   };
 
   const resolveService = (name) => {
+    // `tools` MUST resolve: the owner index learns pre-existing registrations by
+    // reading `tools.layers.global.tools` the first time the service is resolved,
+    // and family discovery is derived from exactly that set.
+    if (name === "tools") return toolsService;
     if (name === "systemPrompt") return systemPrompt;
     if (name === "agents") return { list: () => agents };
     if (name === "webServer") return options.webServer;
@@ -310,34 +356,158 @@ function createHost(options = {}) {
   };
 }
 
-/** Register a third-party-looking tool. */
 /**
- * Register a tool into one agent's scope instead of the global layer.
+ * Fixture packages for attribution.
  *
- * Used by the scoped-visibility scenario: the schedule bundle registers from
- * inside a scoped `ctx.inject`, and a `schemas()` call without that scope must
- * not be able to see it.
+ * Tool ownership is resolved by walking the call stack to the nearest
+ * `package.json`, so a tool registered from *this* file would be attributed to
+ * the plugin itself and skipped. Real plugins register from their own frames, so
+ * the harness writes stand-in packages to a temp directory — outside the plugin's
+ * own root — and registers through them. That is what makes attribution, and
+ * therefore family discovery, exercised rather than stubbed.
  */
-function addScopedTool(host, agent, name, description = `${name} does things`) {
-  let layer = host.scopedTools.get(agent);
-  if (layer === undefined) {
-    layer = new Map();
-    host.scopedTools.set(agent, layer);
-  }
-  layer.set(name, { name, description, parameters: { type: "object", additionalProperties: true } });
+const FIXTURE_ROOT = path.join(os.tmpdir(), "dsh-tool-gate-fixtures");
+const FIXTURE_MODULES = path.join(FIXTURE_ROOT, "node_modules");
+const fixtureModules = new Map();
+const fixtureBundles = new Set();
+
+// The on-disk scan (`lib/tool-scan.js`) reads the *profile*, so point it at this
+// fixture tree. That way a tool registered before the plugin mounts is placed by
+// reading the package that declares it — exactly the path a freshly installed
+// plugin takes on a real machine.
+process.env.DSH_PROFILE_DIR = FIXTURE_ROOT;
+
+function writeProfileManifest() {
+  fs.mkdirSync(FIXTURE_ROOT, { recursive: true });
+  fs.writeFileSync(
+    path.join(FIXTURE_ROOT, "package.json"),
+    JSON.stringify(
+      {
+        name: "dsh-tool-gate-e2e-profile",
+        private: true,
+        dsh: { profile: { bundles: [...fixtureBundles].sort() } },
+      },
+      null,
+      2,
+    ),
+  );
+  // The scan caches its index per profile root, so a package added mid-run has to
+  // invalidate it — the host never does this, because installing a plugin restarts it.
+  forgetScanCache();
 }
 
-function addTool(host, name, description = `${name} does things`) {
-  host.tools.register({
+/** Which package each test tool belongs to. Anything unlisted goes to a catch-all. */
+const TOOL_PACKAGE = {
+  blender_rt_do: "dsh-blender-plugin",
+  blender_rt_see: "dsh-blender-plugin",
+  blender_rt_cmd: "dsh-blender-plugin",
+  gh_repo: "@perrylink/dsh-github",
+  gh_file: "@perrylink/dsh-github",
+  generate_image: "dsh-image-gen",
+  edit_image: "dsh-image-gen",
+  free_search_test: "dsh-free-search",
+  advanced_search: "dsh-free-search",
+  hindsight_list: "@vectorize-io/hindsight-coding-agents",
+  session_search: "@deepseek-ai/dsh-tool-session-query",
+  session_trace: "@deepseek-ai/dsh-tool-session-query",
+  schedule_create: "@deepseek-ai/dsh-tool-schedule",
+  schedule_update: "@deepseek-ai/dsh-tool-schedule",
+  schedule_list: "@deepseek-ai/dsh-tool-schedule",
+  schedule_delete: "@deepseek-ai/dsh-tool-schedule",
+  workflow: "@deepseek-ai/dsh-tool-workflow", // resident: defines no family
+  video_probe: "dsh-video-storyboard",
+  mcp_connector_status: "dsh-mcp-connector",
+};
+const MISC_PACKAGE = "dsh-e2e-misc";
+
+/** A newline, spelled without a backslash so no transfer layer can eat it. */
+const NL = String.fromCharCode(10);
+
+/**
+ * Create (once) a stand-in package and import it.
+ *
+ * The package is written under `<fixture profile>/node_modules/<name>`, and every
+ * tool it registers is also recorded in a `tools.js` listing shaped like the real
+ * bundles' — `{ name: "…" }` entries. That literal is what `lib/tool-scan.js`
+ * looks for, so a tool registered *before* this plugin mounts is still placed by
+ * reading the package on disk: the same path a freshly installed plugin takes.
+ */
+async function fixtureModule(pkg, toolName) {
+  const dir = path.join(FIXTURE_MODULES, ...pkg.split("/"));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: pkg, version: "0.0.0", type: "module", private: true }, null, 2),
+  );
+
+  const entryPoint = path.join(dir, "index.js");
+  if (!fs.existsSync(entryPoint)) {
+    fs.writeFileSync(
+      entryPoint,
+      [
+        "export function register(tools, definition) {",
+        "  return tools.register(definition);",
+        "}",
+        "",
+      ].join(NL),
+    );
+    fixtureModules.delete(pkg);
+  }
+
+  if (typeof toolName === "string" && toolName !== "") {
+    const listing = path.join(dir, "tools.js");
+    const current = fs.existsSync(listing)
+      ? fs.readFileSync(listing, "utf8")
+      : ["export const definitions = [", "];", ""].join(NL);
+    const marker = 'name: "' + toolName + '"';
+    if (!current.includes(marker)) {
+      const entry = "  { name: \"" + toolName + "\", description: \"" + toolName + " does things\" }," + NL;
+      fs.writeFileSync(listing, current.replace(/^\];$/mu, entry + "];"));
+    }
+  }
+
+  if (!fixtureBundles.has(pkg)) {
+    fixtureBundles.add(pkg);
+    writeProfileManifest();
+  }
+
+  if (fixtureModules.has(pkg)) return fixtureModules.get(pkg);
+  const module = await import(pathToFileURL(entryPoint).href);
+  fixtureModules.set(pkg, module);
+  return module;
+}
+
+/** The definition shape every fake tool uses. */
+function definitionOf(name) {
+  return {
     name,
-    description,
+    description: `${name} does things`,
     parameters: { type: "object", additionalProperties: true },
     output: { schema: { type: "json" }, render: (_args, value) => value?.content ?? [] },
     async execute(args) {
       return { content: [{ type: "text", text: `${name} ran with ${JSON.stringify(args)}` }] };
     },
-  });
+  };
 }
+
+/** Register a third-party-looking tool from a stand-in package's frame. */
+async function addTool(host, name, packageName = TOOL_PACKAGE[name] ?? MISC_PACKAGE) {
+  const module = await fixtureModule(packageName, name);
+  module.register(host.tools, definitionOf(name));
+}
+
+/**
+ * Register into one agent's layer, still through a package frame.
+ *
+ * Visibility is narrowed; attribution is not. That is how the schedule bundle
+ * registers its four tools, and the reason a scope-less `schemas()` call cannot
+ * see them.
+ */
+async function addScopedTool(host, agent, name, packageName = TOOL_PACKAGE[name] ?? MISC_PACKAGE) {
+  const module = await fixtureModule(packageName, name);
+  return module.register(host.tools, definitionOf(name));
+}
+
 
 const plain = (config) => {
   const out = {};
@@ -353,7 +523,7 @@ const plain = (config) => {
 {
   const host = createHost();
   for (const name of ["workflow", "ops_bash", "compress", "blender_rt_do", "gh_repo", "generate_image"]) {
-    addTool(host, name);
+    await addTool(host, name);
   }
   const before = host.tools.size;
   plugin.apply(host.ctx, Config({}));
@@ -381,7 +551,7 @@ const plain = (config) => {
     "workflow", "ops_bash", "compress",
     "blender_rt_do", "blender_rt_see", "gh_repo", "gh_file", "generate_image", "mcp__wincu__x",
   ]) {
-    addTool(host, name);
+    await addTool(host, name);
   }
   const config = Config({ enabled: true });
   plugin.apply(host.ctx, config);
@@ -459,8 +629,8 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  addTool(host, "workflow");
-  addTool(host, "blender_rt_do");
+  await addTool(host, "workflow");
+  await addTool(host, "blender_rt_do");
   plugin.apply(host.ctx, Config({ enabled: true }));
   const agent = { id: "s3", session: { log: [] } };
   host.agents.push(agent);
@@ -533,8 +703,8 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  addTool(host, "run_code");
-  addTool(host, "blender_rt_do");
+  await addTool(host, "run_code");
+  await addTool(host, "blender_rt_do");
   plugin.apply(host.ctx, Config({ enabled: true }));
   const agent = { id: "s5", session: { log: [] } };
   host.agents.push(agent);
@@ -548,8 +718,8 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  addTool(host, "workflow");
-  addTool(host, "blender_rt_do");
+  await addTool(host, "workflow");
+  await addTool(host, "blender_rt_do");
   plugin.apply(host.ctx, Config({ enabled: true }));
   const a = { id: "sa", session: { log: [] } };
   const b = { id: "sb", session: { log: [] } };
@@ -568,7 +738,7 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  for (const name of ["workflow", "blender_rt_do"]) addTool(host, name);
+  for (const name of ["workflow", "blender_rt_do"]) await addTool(host, name);
   const live = Config({ enabled: true });
   plugin.apply(host.ctx, live);
   const agent = { id: "s7", session: { log: [] } };
@@ -594,7 +764,7 @@ const plain = (config) => {
 {
   const host = createHost();
   for (const name of ["workflow", "session_search", "session_trace", "schedule_create", "ops_bash"]) {
-    addTool(host, name);
+    await addTool(host, name);
   }
   plugin.apply(host.ctx, Config({ enabled: true }));
   const agent = { id: "s8", session: { log: [] } };
@@ -620,7 +790,7 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  for (const name of ["workflow", "session_search", "blender_rt_do"]) addTool(host, name);
+  for (const name of ["workflow", "session_search", "blender_rt_do"]) await addTool(host, name);
   const live = Config({ enabled: true, builtinFamilies: false });
   plugin.apply(host.ctx, live);
   const agent = { id: "s9", session: { log: [] } };
@@ -649,7 +819,7 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  for (const name of ["workflow", "generate_image", "edit_image", "free_search_test"]) addTool(host, name);
+  for (const name of ["workflow", "generate_image", "edit_image", "free_search_test"]) await addTool(host, name);
   // Two plugin-owned prompt contributions: one section (search-style) and one
   // context (image-style), both attached to a collapsed family.
   host.systemPrompt.section({ name: "free-search:engines", order: 500, text: "Current mode: auto. Enabled engines: tavily." });
@@ -730,7 +900,7 @@ const plain = (config) => {
 // ————————————————————————————————————————————————————————————————
 {
   const host = createHost();
-  for (const name of ["workflow", "generate_image", "edit_image"]) addTool(host, name);
+  for (const name of ["workflow", "generate_image", "edit_image"]) await addTool(host, name);
   host.systemPrompt.context({ name: "dsh-image-gen:image-defaults", order: 59, text: "Image tools default provider: openai-compat." });
 
   const live = Config({
@@ -769,7 +939,7 @@ const plain = (config) => {
       },
     },
   });
-  for (const name of ["workflow", "session_search", "blender_rt_do", "gh_repo"]) addTool(host, name);
+  for (const name of ["workflow", "session_search", "blender_rt_do", "gh_repo"]) await addTool(host, name);
   host.systemPrompt.section({ name: "free-search:engines", order: 500, text: "engines here" });
 
   plugin.apply(host.ctx, Config({ enabled: true }));
@@ -799,10 +969,20 @@ const plain = (config) => {
   assert.equal(body.ok, true);
   const value = body.value;
   assert.equal(value.enabled, true);
-  assert.ok(value.families.length >= 10, "every family is listed");
-  const session = value.families.find((family) => family.id === "session");
+  // Families are derived from the tools actually registered in this host, so the
+  // count is three here (one per owning package) — the assertion is that every
+  // one of them is listed, not that a fixed number exists.
+  assert.ok(value.families.length >= 3, "every derived family is listed");
+  assert.deepEqual(
+    value.families.map((family) => family.gateway).sort(),
+    ["blender", "github", "session"],
+    "the gateway names come from the label hints",
+  );
+  const session = value.families.find((family) => family.gateway === "session");
   assert.ok(session.count >= 1, "the session family reports its live member count");
   assert.ok(session.tokens > 0, "and a token weight");
+  assert.equal(session.builtin, true, "a first-party package is marked builtin");
+  assert.equal(session.auto, true, "and marked as discovered rather than configured");
   assert.ok(
     value.plugins.some((pluginRow) => pluginRow.package === "dsh-free-search"),
     "the injected prompt text is attributed to its plugin",
@@ -827,12 +1007,12 @@ const plain = (config) => {
 // members" while the tools sit in the very same session.
 {
   const host = createHost();
-  addTool(host, "workflow");
+  await addTool(host, "workflow");
   plugin.apply(host.ctx, Config({ enabled: true, builtinFamilies: true }));
   const agent = { id: "s13", session: { log: [] } };
   host.agents.push(agent);
   for (const name of ["schedule_create", "schedule_delete", "schedule_list", "schedule_update"]) {
-    addScopedTool(host, agent, name);
+    await addScopedTool(host, agent, name);
   }
   const assembly = await host.assemble(agent);
 
@@ -882,6 +1062,73 @@ const plain = (config) => {
   assert.equal(schedule.count, 4, "the settings page counts the scoped members too");
   assert.ok(schedule.tokens > 0, "and weighs them");
   console.log("OK scoped registrations are visible members");
+}
+
+// ————————————————————————————————————————————————————————————————
+// 14. A plugin nobody has ever heard of becomes a family on its own
+// ————————————————————————————————————————————————————————————————
+// This is the whole point of deriving the partition instead of listing it: the
+// package below appears in no table anywhere in this repository, and still gets a
+// working gateway in the very first assembly after it is registered.
+{
+  const host = createHost();
+  await addTool(host, "workflow");
+  await addTool(host, "acme_widget_create", "dsh-acme-widgets");
+  await addTool(host, "acme_widget_list", "dsh-acme-widgets");
+  await addTool(host, "acme_widget_delete", "dsh-acme-widgets");
+  plugin.apply(host.ctx, Config({ enabled: true }));
+  const agent = { id: "s14", session: { log: [] } };
+  host.agents.push(agent);
+  const assembly = await host.assemble(agent);
+  const names = assembly.tools.map((tool) => tool.name);
+
+  assert.ok(names.includes("acme_widgets"), `a derived gateway appears (got ${names.join(",")})`);
+  assert.ok(!names.includes("acme_widget_create"), "its members are collapsed");
+  assert.ok(!names.includes("acme_widget_list"), "every one of them");
+  assert.ok(names.includes("workflow"), "resident tools are untouched");
+
+  // The gateway is fully functional, not decoration.
+  const listed = await host.tools.execute({
+    callId: "c14",
+    name: "acme_widgets",
+    arguments: { action: "list" },
+    agent,
+  });
+  const payload = JSON.parse(listed.content[0].text);
+  assert.deepEqual(
+    payload.members.map((member) => member.name),
+    ["acme_widget_create", "acme_widget_delete", "acme_widget_list"],
+    "and it lists its own members",
+  );
+
+  // And it dispatches.
+  const called = await host.tools.execute({
+    callId: "c14b",
+    name: "acme_widgets",
+    arguments: { action: "call", tool: "acme_widget_create", arguments: { size: 3 } },
+    agent,
+  });
+  assert.equal(called.isError, false);
+  assert.match(called.content[0].text, /acme_widget_create ran with/);
+  assert.match(called.content[0].text, /"size":3/, "the arguments reached the member");
+
+  // Turning auto-discovery off must leave the world exactly as it was.
+  const manual = createHost();
+  await addTool(manual, "workflow");
+  await addTool(manual, "acme_widget_create", "dsh-acme-widgets");
+  plugin.apply(manual.ctx, Config({ enabled: true, autoFamilies: false }));
+  const manualAgent = { id: "s14c", session: { log: [] } };
+  manual.agents.push(manualAgent);
+  const manualAssembly = await manual.assemble(manualAgent);
+  assert.ok(
+    manualAssembly.tools.some((tool) => tool.name === "acme_widget_create"),
+    "autoFamilies:false keeps unknown plugins resident",
+  );
+  assert.ok(
+    !manualAssembly.tools.some((tool) => tool.name === "acme_widgets"),
+    "and registers no gateway for them",
+  );
+  console.log("OK an unknown plugin becomes its own family");
 }
 
 console.log("\nALL END-TO-END CHECKS PASSED");
