@@ -582,6 +582,23 @@ const plain = (config) => {
   assert.ok(notice !== undefined, "notice section added");
   assert.match(notice.text, /`blender`/, "notice lists the blender gateway");
   assert.match(notice.text, /`github`/, "notice lists the github gateway");
+  // The roster carries the label beside the name. The name is what the model
+  // matches against the tool list; the label is what says the gateway is for.
+  assert.match(notice.text, /`blender` Blender/, "the roster pairs each gateway with its label");
+  assert.match(notice.text, /`github` GitHub/);
+  // The usage contract is stated once, here, instead of on every gateway.
+  assert.match(notice.text, /action: "list"/, "the notice explains list");
+  assert.match(notice.text, /action: "call"/, "and call");
+  // And it is not stated again anywhere else: no gateway's own description
+  // repeats the shared boilerplate.
+  for (const gatewayName of ["blender", "github", "image", "mcp_servers"]) {
+    const definition = host.tools.get(gatewayName);
+    assert.equal(
+      definition.description.includes("这个家族的成员工具不在本轮工具列表里"),
+      false,
+      `${gatewayName} does not repeat the notice`,
+    );
+  }
 
   const second = await host.assemble(agent);
   assert.equal(
@@ -1081,6 +1098,40 @@ const plain = (config) => {
       `unknown ungrouped reason: ${ungrouped.reason}`,
     );
     assert.equal(ungrouped.enabled, null, `${ungrouped.package} offers no switch`);
+    // The host filters first-party packages out of this list: they are never sent
+    // to the wire from here and no switch governs them, so listing them only
+    // buried the rows that do. The count below is what keeps the omission honest.
+    assert.equal(ungrouped.thirdParty, true, `${ungrouped.package} is a third-party package`);
+    assert.equal(
+      /^@deepseek-ai\/|^@dsh-ops\//.test(ungrouped.package),
+      false,
+      `a harness package must not appear in ungrouped: ${ungrouped.package}`,
+    );
+    // One row per package: a Loader subpath specifier is not its own package.
+    const parts = ungrouped.package.split("/");
+    assert.equal(
+      parts.length <= 2,
+      true,
+      `ungrouped packages are bare names, not entry specifiers: ${ungrouped.package}`,
+    );
+    if (parts.length === 2) assert.equal(parts[0].startsWith("@"), true);
+  }
+  assert.equal(
+    typeof value.ungroupedBuiltin,
+    "number",
+    "the count of omitted first-party packages is reported",
+  );
+  // Every collapsed family must be describable, or its gateway says nothing about
+  // what is behind it. In this fake host there is no `pluginPackages` service, so
+  // the fallback table is what answers — which is the point: the contract is
+  // "non-empty", not "non-empty only when the host helps".
+  for (const family of value.families) {
+    if (family.hidden === true) continue;
+    assert.notEqual(family.description, "", `${family.id} has a description`);
+    assert.ok(
+      ["metaOf", "manifest", "hint", "derived", "override"].includes(family.descriptionSource),
+      `unknown description source on ${family.id}: ${family.descriptionSource}`,
+    );
   }
   assert.equal(
     value.families.some((family) => (family.packages ?? []).includes(value.ungrouped[0]?.package)),

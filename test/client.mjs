@@ -147,16 +147,18 @@ const families = [
     promptDisclosure: { available: false, reason: "no-prose", chars: 0, names: [], required: false, enabled: false } },
 ];
 // Packages with no family: read-only, but still shown so their prompt weight is
-// visible rather than silently dropped.
+// visible rather than silently dropped. Both are third-party, because the host
+// filters first-party packages out of this list — they never reach the wire from
+// here and no switch governs them.
 const ungrouped = [
-  { package: "@deepseek-ai/dsh-tool-goal", thirdParty: false, reason: "resident", toolCount: 3, chars: 1056,
-    names: ["tool:goal"], enabled: null },
-  { package: "@deepseek-ai/dsh-client-ui-deliverables", thirdParty: false, reason: "no-tools", toolCount: 0,
-    chars: 2608, names: ["deliverables:ui"], enabled: null },
+  { package: "dsh-free-search", thirdParty: true, reason: "resident", toolCount: 3, chars: 1056,
+    names: ["free-search:engines"], enabled: null },
+  { package: "dsh-context", thirdParty: true, reason: "no-tools", toolCount: 0,
+    chars: 2608, names: ["context:ui"], enabled: null },
 ];
 const payload = {
   schemaVersion: 1, enabled: true, builtinFamilies: true, promptDisclosure: true,
-  wireToolCount: 58, savedTokens: 31725, families, ungrouped,
+  wireToolCount: 58, savedTokens: 31725, families, ungrouped, ungroupedBuiltin: 31,
   config: { listDetail: true, staticNotice: true, interceptDirectCalls: true, guardFallback: true,
     concurrencyDelegate: false, freeze: true, unknownOwnerPolicy: "expose", gatewayPrefix: "" },
 };
@@ -262,10 +264,13 @@ assert.match(page, /内置/, "a first-party family is labelled");
 // Packages with no family stay visible, read-only: the user must be able to see
 // that they inject text without a switch being offered that does nothing.
 assert.match(page, /未参与折叠/, "ungrouped packages get their own read-only section");
-assert.match(page, /@deepseek-ai\/dsh-tool-goal/, "a resident package is listed");
-assert.match(page, /dsh-client-ui-deliverables/, "a prompt-only package is listed");
+assert.match(page, /dsh-free-search/, "a resident package is listed");
+assert.match(page, /dsh-context/, "a prompt-only package is listed");
 assert.match(page, /工具全部常驻/, "and says why it has no switch");
 assert.match(page, /只读/, "and is marked read-only");
+// First-party packages are filtered out by the host, so the count is the only
+// trace they leave — without it the section reads as a complete inventory.
+assert.match(page, /另有 31 个内置插件/, "the omitted first-party packages are accounted for");
 
 assert.match(page, /wire 上 58 个工具/, "the summary line reports the live wire count");
 assert.equal(/Agent 内核/.test(page), false, "a family with no members is not rendered as a row");

@@ -83,6 +83,49 @@ assert.equal(fam.resolveFamilies({ session_query: { enabled: false } }, { owners
 assert.equal(fam.resolveFamilies({ session_query: { enabled: false } }, { owners }).schedule.enabled, true);
 // autoFamilies: false derives nothing at all.
 assert.deepEqual(Object.keys(fam.resolveFamilies({}, { owners, auto: false })), []);
+
+// ——— descriptions come from the host, not from a table in here ————————
+// A plugin's own metadata wins over the fallback table, and the family records
+// which layer answered so the settings page can show it.
+{
+  const withMeta = fam.resolveFamilies({}, {
+    owners,
+    metadata: (pkg) => (pkg === "@perrylink/dsh-github"
+      ? { text: "GitHub PRs, reviews and CI", source: "metaOf" }
+      : { text: "", source: "none" }),
+  });
+  assert.equal(withMeta.github.description, "GitHub PRs, reviews and CI", "the host's text replaces the table row");
+  assert.equal(withMeta.github.descriptionSource, "metaOf", "and the family records which layer answered");
+  // A package the host knows nothing about still falls back to the table.
+  assert.equal(withMeta.blender_plugin.description, "Blender 3D modeling, rendering, QC and delivery");
+  assert.equal(withMeta.blender_plugin.descriptionSource, "hint");
+  // An id with nothing anywhere is honestly empty rather than invented.
+  assert.equal(withMeta.some_future_plugin.description, "");
+  assert.equal(withMeta.some_future_plugin.descriptionSource, "none");
+
+  // A configured description outranks both, and says so.
+  const overridden = fam.resolveFamilies(
+    { github: { description: "覆盖" } },
+    { owners, metadata: () => ({ text: "X", source: "metaOf" }) },
+  );
+  assert.equal(overridden.github.description, "覆盖", "the user's description wins");
+  assert.equal(overridden.github.descriptionSource, "override");
+
+  // Without a metadata reader the table's text is what shows, unchanged.
+  assert.equal(fam.resolveFamilies({}, { owners }).github.description, "GitHub repositories, issues, pull requests and reviews");
+
+  // A label keeps its fallback chain: table -> humanized id. Third-party host
+  // titles are usually the package name, so a bare id must still read well.
+  assert.equal(fam.resolveFamilies({}, { owners }).some_future_plugin.label, "Some Future Plugin");
+  assert.equal(
+    fam.resolveFamilies({}, { owners, metadata: () => ({ title: "文件读写工具" }) }).fs?.label,
+    undefined,
+    "no family is invented for a package with no tools",
+  );
+  const withFs = fam.resolveFamilies({}, { owners: { read_file: "@deepseek-ai/dsh-tool-fs" }, metadata: () => ({ title: "文件读写工具" }) });
+  assert.equal(withFs.fs.label, "文件读写工具", "the host's localized title is used when the table has none");
+  console.log("OK description sources");
+}
 // Builtin members are no longer unconditionally resident.
 assert.equal(fam.isKeepTool("session_search"), false, "session_search is collapsible");
 assert.equal(fam.isKeepTool("schedule_create"), false, "schedule_create is collapsible");
@@ -197,6 +240,27 @@ const gateway = createGateway({ family: families.blender_plugin, name: "blender"
 assert.equal(gateway.name, "blender");
 assert.equal(typeof gateway.execute, "function");
 assert.equal(typeof gateway.output.render, "function");
+// The usage contract belongs to the system-prompt notice, said once — not to
+// every gateway, which is where it used to be repeated 12 times.
+assert.equal(
+  gateway.description.includes("这个家族的成员工具不在本轮工具列表里"),
+  false,
+  "the gateway description carries no shared boilerplate",
+);
+assert.match(gateway.description, /^网关 · Blender：/, "it says what this family is for, in one line");
+assert.ok(gateway.description.length < 120, `the description stays short (${gateway.description.length} bytes)`);
+// With the notice switched off, nothing else tells the model this tool is a
+// gateway, so the description has to say so itself.
+const selfExplaining = createGateway({
+  family: families.blender_plugin,
+  name: "blender",
+  runtime: { ...runtime, config: () => plain(Config({ enabled: true, staticNotice: false })) },
+});
+assert.match(selfExplaining.description, /action="list"/, "self-explaining when no notice is present");
+assert.match(selfExplaining.description, /action="call"/);
+// A family with nothing to say still gets a usable one-liner.
+const bare = createGateway({ family: { id: "x", label: "X" }, name: "x", runtime });
+assert.equal(bare.description, "网关 · X", "an empty description still names the family");
 const params = gateway.parameters;
 assert.equal(params.type, "object");
 assert.deepEqual(params.required, ["action"]);
@@ -260,6 +324,52 @@ console.log("OK gateway");
     return set.has(name);
   }
   console.log("OK empty families get no gateway");
+}
+
+// ——— 3c. A gateway is rebuilt when its own description bytes change ————
+// Names alone are not enough: a plugin upgrade rewrites a family's description,
+// and `staticNotice` flipping changes whether the description must explain
+// itself. Leaving the old registration in place would show the model stale text
+// for the rest of the session, because the wire surface is frozen.
+{
+  const mounted = new Map();
+  const unscannable = new Set();
+  let disposals = 0;
+  const table = {
+    real: { id: "real", label: "Real", description: "first", tools: [], prefixes: [], packages: ["@acme/real"], enabled: true },
+  };
+  const fakeCtx = {
+    tools: {
+      register: () => () => { disposals += 1; },
+    },
+  };
+  const reconcile = (familiesTable, staticNotice) => reconcileGateways({
+    ctx: fakeCtx,
+    families: familiesTable,
+    gatewayNameFor: (id) => `gw${id}`,
+    runtime: { ...runtime, config: () => ({ ...plain(Config({ enabled: true })), staticNotice }) },
+    logger: ctx.logger,
+    mounted,
+    unscannable,
+    emptyFamilies: new Set(),
+  });
+
+  assert.deepEqual(reconcile(table, true), ["gwreal"]);
+  assert.equal(disposals, 0, "an unchanged family is not re-registered");
+  assert.deepEqual(reconcile(table, true), ["gwreal"]);
+  assert.equal(disposals, 0, "and stays put across repeated reconciles");
+
+  // A plugin upgrade: same name, new bytes.
+  const upgraded = { real: { ...table.real, description: "second" } };
+  assert.deepEqual(reconcile(upgraded, true), ["gwreal"]);
+  assert.equal(disposals, 1, "a changed description disposes the old registration");
+  assert.deepEqual(reconcile(upgraded, true), ["gwreal"]);
+  assert.equal(disposals, 1, "and then settles");
+
+  // Turning the notice off makes every description self-explaining.
+  assert.deepEqual(reconcile(upgraded, false), ["gwreal"]);
+  assert.equal(disposals, 2, "staticNotice is part of what a gateway's bytes depend on");
+  console.log("OK gateway rebuilds on description change");
 }
 
 // ——— 4. list / call through the gateway ——————————————————————————
@@ -512,6 +622,50 @@ console.log("OK gate record");
   assert.equal(typeof index3.registered(new Set(["still_unknown"])), "object");
   index3.dispose();
   console.log("OK scan hot path");
+}
+
+// ——— summarize: one sentence, cut by code point ————————————————————
+{
+  const { summarize } = await import(at("lib/plugin-meta.js"));
+  assert.equal(summarize(""), "");
+  assert.equal(summarize("  \n "), "");
+  // A CJK full stop ends the sentence; the rest is dropped.
+  assert.equal(summarize("第一句。第二句。"), "第一句。");
+  // A version number's period is not a sentence end.
+  assert.equal(summarize("Blender 插件 v3.0.4 直连"), "Blender 插件 v3.0.4 直连");
+  // An ASCII period followed by a space is.
+  assert.equal(summarize("First sentence. Second one."), "First sentence.");
+  // Whitespace is flattened, so a multi-line description cannot reshape a tool.
+  assert.equal(summarize("a\n\nb\tc"), "a b c");
+  // Overlong text is cut at a word boundary and marked.
+  const long = summarize(`${"word ".repeat(60)}end`, 40);
+  assert.ok([...long].length <= 40, "the cut respects the cap in code points");
+  assert.ok(long.endsWith("…"), "and says it was cut");
+  // Cutting must not split a surrogate pair: `[...text]` counts code points.
+  const emoji = summarize("🎨".repeat(80), 10);
+  assert.equal([...emoji].every((char) => char.codePointAt(0) !== undefined), true);
+  assert.equal(emoji.includes("\uFFFD"), false, "no replacement characters from a split pair");
+  // The cap boundary is inclusive.
+  assert.equal([...summarize("字".repeat(120), 120)].length, 120);
+  assert.ok(summarize("字".repeat(121), 120).endsWith("…"));
+  console.log("OK summarize");
+}
+
+// ——— barePackageName: one package, one row ——————————————————————————
+{
+  const { barePackageName } = await import(at("lib/ownership-channel.js"));
+  assert.equal(barePackageName("@scope/name/sub/deep"), "@scope/name");
+  assert.equal(barePackageName("@scope/name"), "@scope/name");
+  assert.equal(barePackageName("pkg/sub"), "pkg");
+  assert.equal(barePackageName("pkg"), "pkg");
+  assert.equal(barePackageName("./relative.js"), undefined);
+  assert.equal(barePackageName("/absolute/path.js"), undefined);
+  assert.equal(barePackageName("node:fs"), undefined);
+  assert.equal(barePackageName("cordis:framework"), undefined);
+  assert.equal(barePackageName(""), undefined);
+  assert.equal(barePackageName(undefined), undefined);
+  assert.equal(barePackageName("@scope"), undefined, "a scope with no package names nothing");
+  console.log("OK barePackageName");
 }
 
 console.log("\nALL CHECKS PASSED");

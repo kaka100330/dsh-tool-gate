@@ -47,6 +47,11 @@ blender  { action: "call", tool: "blender_rt_do",
            arguments: { ... } }                      → 调用成员，返回值与直接调用一致
 ```
 
+这两个动作的含义**只在系统提示词里说一次**（`staticNotice` 那段说明），不再重复写进
+每个网关的描述 —— 否则 12 个网关就是同一段话交 12 遍钱。网关自己的描述只说一件事：
+**这个家族是做什么的**（`网关 · Blender：…`）。关掉 `staticNotice` 时系统提示词里没有那段话，
+每个网关的描述会自动补一句最小可用说明，模型仍能自己摸到 `list`。
+
 同一会话内第二次 `list` 只回一句提示（定义已经在历史里了，不必再占一次上下文）。
 
 模型若直接调用已收起的成员名，会被拦下并提示改走网关 —— 那不是工具本身坏了。
@@ -56,7 +61,15 @@ blender  { action: "call", tool: "blender_rt_do",
 
 **家族不是写死的。** 每个第三方插件包自动成为一个家族：本插件从工具注册处
 回溯出「哪个包注册了这个工具」，把同一包的成员归到一族，用包名推出家族 id，
-再按包名去 `lib/family-labels.js` 取一个好看的名字（取不到就用 id）。
+再按包名去 `lib/family-labels.js` 取一个好看的中文名（取不到就用 id 的驼峰化，
+比如 `computer_use_win` → `Computer Use Win`）。
+
+**网关的描述也不是写死的。** 它读宿主自己的 `pluginPackages` 服务 —— 也就是设置页
+「插件」列表显示的那段描述，同一个来源、同一套 locale 文件，所以两边永远不会打架。
+三级兜底：`metaOf`（读 `locale/*.json`，读不到再读包的 `package.json`）→ 插件清单的
+`description` → `family-labels.js` 的兜底句。**新装一个插件，它的网关立刻有描述，
+本插件的代码一行都不用改。** 设置页在描述后面标出来源（`兜底表` / `你的配置` 等），
+一眼就能看出哪个网关还在吃兜底。
 
 所以**新装一个插件、重载一次，它的工具就会被收进自己的网关**，不需要改本插件的任何代码。
 例子（id 由包名推导）：
@@ -65,11 +78,11 @@ blender  { action: "call", tool: "blender_rt_do",
 | --- | --- | --- |
 | `dsh-blender-plugin` | `blender_plugin` | `blender`（`family-labels.js` 里给了短名） |
 | `@perrylink/dsh-github` | `github` | `github` |
-| `dsh-image-gen` | `image_gen` | `image` |
-| `dsh-image-gen`（未来新装的 `dsh-acme-widgets`） | `acme_widgets` | `acme_widgets` |
+| `dsh-free-search` | `free_search` | `search` |
+| 未来新装的 `dsh-acme-widgets` | `acme_widgets` | `acme_widgets` |
 
-`lib/family-labels.js` 只负责**外观**（中文名、一句话说明、可选的短网关名）。
-删掉它也能跑，只是网关会叫 `blender_plugin` 这种 id 名。
+`lib/family-labels.js` 只负责**短名与可选网关名**（描述已改为从宿主读取）。
+删掉它也能跑，只是网关会叫 `blender_plugin` 这种 id 名、描述退回插件清单原文。
 
 **内置家族**（按显式工具名归属，`builtinFamilies` 总开关控制，默认开）：
 
@@ -90,11 +103,12 @@ blender  { action: "call", tool: "blender_rt_do",
 插件详情页是自建页面，从宿主只读路由 `GET /api/dsh-tool-gate/describe` 取实时清单：
 
 - **总开关** —— 关闭即完全不介入。
-- **家族折叠** —— 内置家族总开关；然后每个家族一行：开关 + 成员数 + ≈tok + 网关名 + 成员名单。
-- **提示词披露** —— 总开关 + **每个插件一行开关**（不只是会注入提示词的那几个）。
+- **家族列表** —— 一行 = 一个家族：左侧是说明（描述 + 来源小字 + 成员数 + ≈tok + 网关名 +
+  成员名单），右侧是折叠开关；第二行是该家族的提示词披露开关。
   后端把「拥有工具的包」「家族定义里点名的包」「已经能归属出提示词的包」三者取并集，
   所以将来某个插件开始注入提示词时，**不需要改本插件**就会出现可用的开关行。
   不能披露的行不隐藏，而是灰显并写明原因（`无注入` / `不可披露`），并标注 `内置` 或第三方。
+- **未参与折叠（只读）** —— 没有家族的第三方包，以及一行「另有 N 个内置插件的包未参与折叠」的注脚。
 - **行为细节** —— list 详细度、直呼拦截、执行期守卫、并发声明、会话内冻结、未知归属策略。
 - 底部三个批量按钮：全部家族折叠 / 全部家族常驻 / 全部插件可披露。
 
@@ -214,9 +228,11 @@ lib/config.js        schemastery Config（全字段 volatile + 中文说明 → 
 lib/owner.js         工具归属识别（实时包装 / 栈回溯 / 读盘扫描 / 内置表兜底）
 lib/tool-scan.js     读盘扫描：问已安装的包「这个工具名在哪」，装新插件不用改仓库
 lib/discovery.js     从归属快照推导家族表：一个插件包 = 一个家族
-lib/family-labels.js 家族外观（中文名、说明、可选短网关名）——只有这一层是手写的
+lib/plugin-meta.js   网关描述的通用来源：读宿主的 pluginPackages（三级兜底 + mtime 缓存）
+lib/family-labels.js 家族短名与可选短网关名（描述已改为从宿主读取，这里只剩兜底句）
+lib/ownership-channel.js  归属通道 + 包名归一化（barePackageName）与「第一方」判定
 lib/families.js      家族表装配、归属解析、冻结面构造（code-unit 排序）
-lib/gateways.js      网关的 defineTool 定义与注册
+lib/gateways.js      网关的 defineTool 定义与注册（描述只说这个家族做什么）
 lib/dispatch.js      list / call 的实现（含 turn 语义上抛、提示词回吐）
 lib/guard.js         pre-execute 拦截 + tools.guard 兜底
 lib/state.js         每个 agent 的状态、plugin record 读写
@@ -233,7 +249,8 @@ test/client.mjs                     渲染冒烟：用最小 React shim 跑一�
 ```
 
 设计文档在 `docs/`：`设计蓝图.md`（为什么这么设计）、`落地方案.md`（实现规格与验收）、
-`工具家族与权重.md`（141 个工具逐项 tok 权重）。
+`工具家族与权重.md`（141 个工具逐项 tok 权重）、`改进方案.md`（通用性审计与性能排名）、
+`改进方案-网关描述与提示词分层.md`（0.7.0 的依据：描述来源、提示词分层、ungrouped 过滤）。
 
 ## 安装注意
 
@@ -309,7 +326,71 @@ node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，15 个场景
 node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓出悬空变量与 hook 顺序问题
 ```
 
-## 0.5.0 的改动
+## 0.7.0 的改动
+
+### 网关描述改为从宿主读，不再写死
+
+此前每个家族的名字与一句话说明都写在 `lib/family-labels.js` 里（`BY_PACKAGE` 9 条 + `BY_ID` 1 条），
+`lib/gateways.js` 用它们拼出 `${label} 家族的网关。${description}`。后果是：表里没有的包
+（也就是**任何将来新装的插件**）只能拿家族 id 当描述；而 `lib/discovery.js` 早就留好了
+`metadata` 注入口，`lib/index.js` 的 `resolveNow` 却**从来没传过**——一条一次都没接线的通路。
+
+现在描述走宿主自己的 `pluginPackages`（设置页「插件」列表显示的就是它产的文本，同一个来源、
+同一套 locale 文件，两边不会打架），三级兜底：
+
+1. `metaOf(pkg)` —— 读 `locale/*.json` 的 `meta.description`，读不到再读包自己的 `package.json`；
+2. 插件清单的 `description`；
+3. `lib/family-labels.js` 的兜底句（只剩这一层是手写的）。
+
+**新模块 `lib/plugin-meta.js`** 负责这一切。要点都是被实测逼出来的：
+
+- 每个 Loader entry 的 `baseUrl` 才是解析锚点。拿单一 profile 根去解析，第一方包全部落空。
+- `readPluginMeta` 只对**裸包名**读 `package.json`，子路径 specifier（`dsh-ops/discovery`）永远读不到，
+  所以先 `barePackageName` 再查。
+- locale 文件必须是 `{ "meta": { "title", "description" } }`。宿主 `dictionariesOf` 读的是
+  `parsed.meta.title`，旧版平铺写法被**静默忽略**——本插件自己的两个 locale 文件已一并修正。
+- 按包记 `manifestPath` 与 mtime，文件没改就不重复读；`describe()` 永不抛。
+
+label 的取值链也相应变成：短名表 → 宿主 `meta.title`（仅在它不等于包名时）→ id 驼峰化
+（`computer_use_win` → `Computer Use Win`）。设置页在描述后面标出来源，还在吃兜底的一眼可见。
+
+### 网关使用说明只在系统提示词里说一次
+
+`buildNotice` 早就在系统提示词里讲了 `list` / `call` 怎么用，而每个网关的描述又各带一遍同样的
+4 行样板——12 个网关 **351 B × 12 = 4212 B**，占全部网关描述文本的 85%。
+
+现在描述只说「这个家族是做什么的」，格式固定为 `网关 · Blender：…`；说明只在 notice 里出现一次，
+notice 末尾补一行名单 `本轮收起：\`blender\` Blender · \`github\` GitHub · …`。
+`staticNotice: false`（没有 notice）时，每个网关的描述自动补一句最小可用说明，
+模型仍能自己摸到 `list`——这是唯一会变长的配置。
+
+`reconcileGateways` 的比对从此看**网关自己的字节**（`[id, label, description, selfExplaining]`），
+而不只是家族成员。否则切换 `staticNotice` 会出现「开关翻了、描述却还是旧的」——
+描述恰恰是这段唯一的产物。
+
+顺带把三个共享参数描述压到最短（序列化 400 B / 网关）：模型要知道的是怎么调网关，
+不是网关为什么存在。
+
+### 「未参与折叠」只列第三方
+
+设置页那一段列出 38 行，其中 31 行是内置插件——它们的提示词根本不由本插件发往 wire，列出来
+只会把真正需要注意的 4 行淹掉。现在服务端只保留 `thirdParty === true` 的行（实测 38 → 4），
+省下的行数记在 `ungroupedBuiltin` 里，页面用一行小字交代「另有 N 个内置插件的包未参与折叠」。
+同时把 `runtime.packages()` 的 key 走 `barePackageName` 归一化：`dsh-ops/discovery`、
+`dsh-ops/mode-ptc` 这类子路径身份并回它们真正所属的包。
+
+### 实测（desktop profile，12 个可见家族）
+
+| 项 | 0.6.0 | 0.7.0 |
+| --- | ---: | ---: |
+| 12 个网关 description 合计 | 4964 B | **1648 B** |
+| 共享参数 schema ×12 | 5676 B | **4800 B** |
+| 系统提示词 notice | 1341 B | **897 B**（632 规则 + 265 名单） |
+| **合计** | **11981 B ≈ 3.7k tok** | **7345 B ≈ 2.3k tok（−38.7%）** |
+
+逐家族的 description 与 `docs/改进方案-网关描述与提示词分层.md` §8.2 的预算逐字节一致。
+
+## 0.6.0 的改动
 
 ### 设置页合并成一个列表
 
@@ -317,7 +398,7 @@ node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓
 同一批东西——**一个家族就是它的插件包**（发现逻辑按包派生家族），于是同一个实体出现
 两次，用户要在两处回答同一个问题。而 42 个插件行里只有 4 行真的可用，其余全是灰的。
 
-0.5.0 把两段并成一段：一行 = 一个家族，折叠开关在右侧，提示词开关在行内第二行。
+0.6.0 把两段并成一段：一行 = 一个家族，折叠开关在右侧，提示词开关在行内第二行。
 
 ```jsonc
 // families[] 每行新增
@@ -332,7 +413,7 @@ node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓
 }
 // 顶层新增，只读；plugins[] 不再存在
 "ungrouped": [
-  { "package": "@deepseek-ai/dsh-tool-goal", "reason": "resident", "chars": 1056, "enabled": null }
+  { "package": "dsh-context", "reason": "no-tools", "chars": 0, "enabled": null, "thirdParty": true }
 ]
 ```
 
@@ -341,10 +422,13 @@ node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓
 
 无家族的包（工具全常驻、或只注入提示词不注册工具）进 `ungrouped`，只读列出：它们仍
 可能在往提示词里注入内容，藏起来会让人以为是漏了；但也不给一个翻不动、看着像坏的开关。
+（0.7.0 起只列第三方，见上。）
 
 配置随之升到 v2：`families[id].promptDisclosure: boolean` 取代 `promptPlugins[pkg].enabled`。
 `lib/migrate.js` 在家族表解析之后跑一次幂等迁移，把 v1 的非空开关折到对应家族上再清空旧键
 （无家族的包 drop 并记 debug 日志）。迁移之后只读家族标志，一个开关不再有两个真相。
+
+## 0.5.0 的改动
 
 ### 归属改为读 carrier，栈回溯降为兜底
 
