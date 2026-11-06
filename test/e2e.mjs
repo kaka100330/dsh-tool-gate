@@ -874,6 +874,31 @@ const plain = (config) => {
   );
   assert.equal(third.sections.find((s) => s.name === "harness:identity").text, "You are an AI agent.", "identity stays");
 
+  // A plugin can declare its own entry immutable instead of relying on our
+  // hard-coded name list. `mutable` is not interpreted by the host — it stores
+  // the registration object as given — so this is a convention with the
+  // registrant, and the declaration must win. Uses a name from the static
+  // attribution table, so the entry really is attributable: an unattributed
+  // entry would stay untouched for an entirely different reason and this
+  // assertion would pass without testing anything.
+  host.systemPrompt.context({
+    name: "dsh-image-gen:canvas",
+    order: 60,
+    mutable: false,
+    text: "Canvas rules are pinned by the deployment; do not summarize them away.",
+  });
+  const pinned = await host.assemble(agent);
+  assert.equal(
+    pinned.contexts.find((c) => c.name === "dsh-image-gen:canvas").text,
+    "Canvas rules are pinned by the deployment; do not summarize them away.",
+    "a `mutable: false` entry is never blanked, even though its family is collapsed and its plugin is switched on",
+  );
+  assert.equal(
+    pinned.contexts.find((c) => c.name === "dsh-image-gen:image-defaults").text,
+    "",
+    "and the mutable sibling in the same plugin is still blanked",
+  );
+
   // Turning the master switch off puts the prose back on the next assembly.
   const write = (field, value) => {
     const ref = live[field];
@@ -983,9 +1008,46 @@ const plain = (config) => {
   assert.ok(session.tokens > 0, "and a token weight");
   assert.equal(session.builtin, true, "a first-party package is marked builtin");
   assert.equal(session.auto, true, "and marked as discovered rather than configured");
+  // A family with no members has nothing behind its gateway; the page hides the
+  // row and the gateway is not mounted. `hidden` is what the client keys on.
+  for (const family of value.families) {
+    assert.equal(
+      family.hidden,
+      family.count === 0,
+      `hidden must mirror membership (family ${family.id}, count ${family.count})`,
+    );
+  }
   assert.ok(
     value.plugins.some((pluginRow) => pluginRow.package === "dsh-free-search"),
     "the injected prompt text is attributed to its plugin",
+  );
+  // Schema v2 adds the two things the page needs to explain itself: why a row is
+  // greyed out, and which tools are on the wire in no family.
+  assert.equal(value.schemaVersion, 2, "the payload is the documented v2 shape");
+  assert.ok(Array.isArray(value.ungrouped), "ungrouped tools are reported, not silently dropped");
+  for (const ungrouped of value.ungrouped) {
+    assert.equal(typeof ungrouped.name, "string");
+    assert.ok(
+      ["resident", "mcp", "unowned"].includes(ungrouped.reason),
+      `unknown ungrouped reason: ${ungrouped.reason}`,
+    );
+  }
+  assert.ok(
+    value.ungrouped.every((row) => row.name !== "read" || row.reason === "resident"),
+    "a harness tool that is resident by design says so",
+  );
+  for (const pluginRow of value.plugins) {
+    assert.equal(typeof pluginRow.reason, "string", `${pluginRow.package} states a reason`);
+    // The row's switch must agree with its reason: only `ready` is switchable.
+    assert.equal(
+      pluginRow.disclosureAvailable,
+      pluginRow.reason === "ready",
+      `${pluginRow.package}: disclosureAvailable must follow reason`,
+    );
+  }
+  assert.ok(
+    value.config.diskScan === "on" || value.config.diskScan === "off",
+    "the page can read the scan switch",
   );
 
   // A cross-site request must be refused.
@@ -1062,6 +1124,58 @@ const plain = (config) => {
   assert.equal(schedule.count, 4, "the settings page counts the scoped members too");
   assert.ok(schedule.tokens > 0, "and weighs them");
   console.log("OK scoped registrations are visible members");
+}
+
+// ————————————————————————————————————————————————————————————————
+// 15. The gate never attributes other plugins' work to itself
+// ————————————————————————————————————————————————————————————————
+// Attribution used to read `ctx.fiber.name` and walk the stack, both of which
+// resolve to *this* plugin. The settings page then showed a `dsh-tool-gate` row
+// carrying every other package's tool and prompt-section names — the row looked
+// like a plugin with 15 tools and 0 owners, and the real owners were invisible.
+{
+  const host = createHost({
+    webServer: {
+      register(route) {
+        this.routes ??= new Map();
+        this.routes.set(route.path, route);
+        return () => this.routes.delete(route.path);
+      },
+    },
+  });
+  await addTool(host, "workflow");
+  await addTool(host, "acme_gadget_a", "dsh-acme-gadgets");
+  await addTool(host, "acme_gadget_b", "dsh-acme-gadgets");
+  plugin.apply(host.ctx, Config({ enabled: true }));
+  const agent = { id: "s15", session: { log: [] } };
+  host.agents.push(agent);
+  await host.assemble(agent);
+
+  let payload;
+  const route = host.ctx.get("webServer", false).routes.get("/api/dsh-tool-gate/describe");
+  await route.handler(
+    {
+      method: "GET",
+      headers: { host: "127.0.0.1:52993" },
+      socket: { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" },
+    },
+    { writeHead: () => {}, end: (body) => { payload = JSON.parse(body); } },
+  );
+
+  const self = payload.value.plugins.find((row) => row.package === "dsh-tool-gate");
+  assert.ok(!self || self.toolCount === 0, "the gate claims no tools of its own");
+  assert.ok(
+    self === undefined || (self.names ?? []).length === 0,
+    `the gate claims no prompt sections of its own (got ${(self?.names ?? []).join(",")})`,
+  );
+  const gadgets = payload.value.plugins.find((row) => row.package === "dsh-acme-gadgets");
+  assert.ok(gadgets !== undefined, "the real owner is listed instead");
+  assert.equal(gadgets.toolCount, 2, "with exactly its own tools");
+  assert.ok(
+    !payload.value.families.some((family) => family.id === "dsh-tool-gate"),
+    "and the gate never becomes a family of its own",
+  );
+  console.log("OK attribution never self-pollutes");
 }
 
 // ————————————————————————————————————————————————————————————————

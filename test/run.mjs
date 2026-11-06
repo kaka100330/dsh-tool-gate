@@ -10,8 +10,8 @@ const at = (relative) => pathToFileURL(path.join(PKG, relative)).href;
 const { Config } = await import(at("lib/config.js"));
 const fam = await import(at("lib/families.js"));
 const { createStateStore } = await import(at("lib/state.js"));
-const { createGateway } = await import(at("lib/gateways.js"));
-const { readGateRecord, agentRowOf, configureSessionApi } = await import(at("lib/state.js"));
+const { createGateway, reconcileGateways } = await import(at("lib/gateways.js"));
+const { readGateRecord, agentRowOf, configureSessionApi, RECORD_STATE } = await import(at("lib/state.js"));
 
 /** The Loader hands volatile fields as getters; this is what `index.js` does. */
 const plain = (config) => {
@@ -210,6 +210,58 @@ assert.equal(
 console.log("gateway parameters:", JSON.stringify(params));
 console.log("OK gateway");
 
+// ——— 3b. A family with no members gets no gateway ————————————————
+// A config-declared family naming a package that registers nothing would
+// otherwise put a tool on the wire whose `list` can only answer "no members".
+{
+  const mounted = new Map();
+  const unscannable = new Set();
+  const registered = [];
+  const fakeCtx = {
+    tools: {
+      register: (definition) => {
+        registered.push(definition.name);
+        return () => {};
+      },
+    },
+  };
+  const table = {
+    real: { id: "real", packages: ["@acme/real"], tools: [], prefixes: [], enabled: true },
+    ghost: { id: "ghost", packages: ["@acme/ghost"], tools: [], prefixes: [], enabled: true },
+  };
+  const names = reconcileGateways({
+    ctx: fakeCtx,
+    families: table,
+    gatewayNameFor: (id) => `gw${id}`,
+    runtime,
+    logger: ctx.logger,
+    mounted,
+    unscannable,
+    emptyFamilies: new Set(["ghost"]),
+  });
+  assert.deepEqual(names, ["gwreal"], "only the populated family gets a gateway");
+  assert.equal(scannableHas(unscannable, "gwghost"), false, "the empty family's name is never tracked");
+
+  // Disposing the ghost family (it becomes populated) must mount it.
+  const names2 = reconcileGateways({
+    ctx: fakeCtx,
+    families: table,
+    gatewayNameFor: (id) => `gw${id}`,
+    runtime,
+    logger: ctx.logger,
+    mounted,
+    unscannable,
+    emptyFamilies: new Set(),
+  });
+  assert.deepEqual(names2, ["gwghost", "gwreal"], "a family that gains members gains its gateway");
+  assert.equal(scannableHas(unscannable, "gwghost"), true, "and its name becomes unscannable again");
+
+  function scannableHas(set, name) {
+    return set.has(name);
+  }
+  console.log("OK empty families get no gateway");
+}
+
 // ——— 4. list / call through the gateway ——————————————————————————
 members.push({
   name: "blender_rt_do",
@@ -276,11 +328,26 @@ const session = { log: [] };
 assert.equal(writeGateRecord(session, a, ["a", "b"], undefined), true);
 session.log.push({ ...written[0] });
 const record = readGateRecord(session);
-assert.equal(record.schemaVersion, 1);
+assert.equal(record.schemaVersion, 2);
 const row = agentRowOf(record, "a");
 assert.deepEqual(row.names, ["a", "b"]);
 assert.deepEqual(row.collapsed, ["collapsed-a"]);
 assert.equal(agentRowOf(record, "zzz"), undefined);
+
+// A session resumed across the upgrade still holds a v1 record. Its agent-row
+// shape is unchanged, so it must be read rather than discarded — refusing would
+// silently un-collapse every family in that session.
+{
+  const legacy = {
+    log: [{ ignorable: true, type: RECORD_STATE, data: { schemaVersion: 1, agents: [{ id: "a", names: [], collapsed: ["c"], createdAt: 0 }] } }],
+  };
+  const old = readGateRecord(legacy);
+  assert.equal(old?.schemaVersion, 1, "a v1 record is still readable");
+  assert.deepEqual(agentRowOf(old, "a")?.collapsed, ["c"]);
+  // An unreadable future version is ignored rather than half-interpreted.
+  const future = { log: [{ ignorable: true, type: RECORD_STATE, data: { schemaVersion: 0, agents: [] } }] };
+  assert.equal(readGateRecord(future), undefined, "a pre-v1 record is rejected");
+}
 console.log("OK gate record");
 
 // ——— framework packages are infrastructure, not plugins ———————————————
@@ -311,5 +378,87 @@ console.log("OK gate record");
   console.log("OK framework packages do not become families");
 }
 
+
+// ——— ownership comes from the carrier context, not the stack —————————
+// Cordis hands a service method a traceable proxy whose `ctx` is the *calling*
+// context, and the Loader tags that context with `Symbol.for("cordis.entry")`.
+// That symbol is the entire attribution channel; the old code read
+// `ctx.fiber.name` (always this plugin) or walked the stack (slow, and wrong
+// through framework frames).
+{
+  const { packageOfContext, callerPackageOf, isHarnessPackage } = await import(at("lib/ownership-channel.js"));
+  const ENTRY = Symbol.for("cordis.entry");
+
+  // A plugin context carries the entry; nesting inherits it through the prototype.
+  const entry = { options: { name: "@acme/plugin-a" } };
+  const pluginCtx = Object.create({ [ENTRY]: entry });
+  const nested = Object.create(pluginCtx);
+  assert.equal(packageOfContext(pluginCtx), "@acme/plugin-a", "entry tag names the package");
+  assert.equal(packageOfContext(nested), "@acme/plugin-a", "a nested context inherits it");
+  assert.equal(packageOfContext(Object.create(null)), undefined, "root code has no owner");
+  assert.equal(packageOfContext(undefined), undefined);
+  assert.equal(packageOfContext(42), undefined);
+
+  // The receiver of a service method is a proxy whose `ctx` is the caller's.
+  assert.equal(callerPackageOf({ ctx: pluginCtx }), "@acme/plugin-a");
+  assert.equal(callerPackageOf({}), undefined, "a plain object has no context");
+  assert.equal(callerPackageOf(null), undefined);
+  // A throwing getter must not escape: it runs on the registration path.
+  assert.equal(callerPackageOf({ get ctx() { throw new Error("boom"); } }), undefined);
+
+  // One definition of "first party", now that three copies used to disagree.
+  assert.equal(isHarnessPackage("@deepseek-ai/dsh-tool-goal"), true);
+  assert.equal(isHarnessPackage("@dsh-ops/dsh-ops"), true, "@dsh-ops counts as first party");
+  assert.equal(isHarnessPackage("dsh-free-search"), false);
+  console.log("OK ownership channel");
+}
+
+// ——— the on-disk scan is not on the hot path ————————————————————————
+// The scan reads every installed bundle's source. A name no bundle can claim
+// would re-trigger it on every call; this plugin's own gateway tools are exactly
+// that. They are declared `unscannable` and the scan must not be asked about them.
+{
+  const { createOwnerIndex } = await import(at("lib/owner.js"));
+  const registered = [];
+  const tools = {
+    register(definition) {
+      registered.push(definition.name);
+      return () => {};
+    },
+    layers: { global: { tools: { entries: () => new Map() } }, scoped: new Map() },
+  };
+  // `ctx.on` returns a disposer; `ctx.effect` runs and remembers the cleanup.
+  const ctx = {
+    tools,
+    on: () => () => {},
+    effect: (factory) => factory(),
+    get: (name) => (name === "tools" ? tools : undefined),
+  };
+  const index = createOwnerIndex(ctx, undefined, {
+    unscannable: new Set(["blender", "github"]),
+    diskScan: false,
+  });
+  const known = new Set(["blender", "github", "alpha_tool"]);
+  const snapshot = index.registered(known);
+  assert.equal(snapshot.blender, undefined, "a gateway name is never attributed to a package");
+  assert.equal(snapshot.github, undefined);
+  index.dispose();
+
+  // `diskScan: false` means an unresolvable name stays unresolved instead of
+  // reaching for the filesystem.
+  const index2 = createOwnerIndex(ctx, undefined, { diskScan: false });
+  assert.deepEqual(index2.registered(new Set(["totally_unknown_tool"])), {});
+  index2.dispose();
+
+  // The config field is volatile, so the index takes a *reader*: flipping the
+  // switch mid-session must be honoured, not frozen at construction.
+  let scanning = false;
+  const index3 = createOwnerIndex(ctx, undefined, { diskScan: () => scanning });
+  assert.deepEqual(index3.registered(new Set(["still_unknown"])), {});
+  scanning = true;
+  assert.equal(typeof index3.registered(new Set(["still_unknown"])), "object");
+  index3.dispose();
+  console.log("OK scan hot path");
+}
 
 console.log("\nALL CHECKS PASSED");

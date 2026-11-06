@@ -133,6 +133,10 @@ const families = [
     members: ["blender_rt_do", "blender_viewport"], gateway: "blender", packages: ["dsh-blender-plugin"], prefixes: [] },
   { id: "session", label: "会话检索", description: "检索历史会话", builtin: true, enabled: true, count: 5, tokens: 1242,
     members: ["session_search"], gateway: "session", packages: ["@deepseek-ai/dsh-tool-session-query"], prefixes: [] },
+  // A family whose plugin registers no tool: its gateway is not mounted, so the
+  // row must not appear. "0 个工具 · 网关 agent" reads like a broken plugin.
+  { id: "agent", label: "Agent 内核", description: "", builtin: true, enabled: true, count: 0, tokens: 0,
+    members: [], gateway: "agent", packages: ["@deepseek-ai/dsh-agent"], prefixes: [], hidden: true },
 ];
 const plugins = [
   { package: "dsh-free-search", thirdParty: true, families: ["search"], toolCount: 9, names: ["free-search:engines"],
@@ -239,6 +243,8 @@ assert.match(page, /无注入/, "a plugin with no prose says so");
 assert.match(page, /内置/, "a first-party plugin is labelled");
 assert.match(page, /不可披露/, "a plugin that cannot be disclosed says so");
 assert.match(page, /wire 上 58 个工具/, "the summary line reports the live wire count");
+assert.equal(/Agent 内核/.test(page), false, "a family with no members is not rendered as a row");
+assert.match(page, /Blender/, "the populated families are still rendered beside it");
 assert.ok(styleNodes.length === 1, "the stylesheet is injected exactly once");
 
 console.log("OK client renders: family rows, every-plugin rows, badges, summary line");

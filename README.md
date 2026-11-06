@@ -304,7 +304,75 @@ wire 上的工具：**58** 个（36 CORE + 7 OPS + 5 Context + 10 网关），�
 
 ```
 node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>   # 只需一次
-node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record
-node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，13 个场景（含 refreshContext 与作用域注册回归）
+node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record / 归属通道
+node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，15 个场景（含 refreshContext、作用域注册、自我污染回归）
 node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓出悬空变量与 hook 顺序问题
 ```
+
+## 0.5.0 的改动
+
+### 归属改为读 carrier，栈回溯降为兜底
+
+插件此前用两条路径判断「谁注册了这个工具」：栈回溯（找调用栈上最近的 `package.json`）
+和 `ctx.fiber.name`。两者都不对：栈回溯在框架回调之间穿过时会认错包，而
+`ctx.fiber.name` **永远是本插件自己**——于是设置页上出现一行 `dsh-tool-gate`，
+里面装着别的插件的 15 个工具名和全部提示词段名。
+
+正确做法是读 carrier。Cordis 把服务方法收到的 `this` 做成一个 traceable proxy，
+其 `ctx` 属性就是**发起这次调用**的上下文；`cordis-plugin-loader` 又给每个插件的
+上下文打了 `Symbol.for("cordis.entry")`，其 `options.name` 就是包名。所以：
+
+```js
+this.ctx[Symbol.for("cordis.entry")].options.name   // → "@acme/plugin-a"
+```
+
+根上下文（宿主自己的工具）没有这个标记，返回 `undefined` —— 这是正确答案，
+不是「未知」。新增 `lib/ownership-channel.js` 统一这个通道，`owner.js` 与
+`prompt-scan.js` 都改为先读它，栈回溯只在 carrier 缺失时兜底。
+
+### 网关名不再触发磁盘扫描
+
+`registered()` 会把「认不出归属」的名字交给磁盘扫描，而扫描要读遍 profile 里每个
+bundle 的源码。插件自己注册的网关工具名不在任何 bundle 的源码里，所以**永远**认不出，
+于是每次调用都要全量重扫。实测（真实清单，109 个名字）：
+
+| | 每次 `registered()` |
+| --- | --- |
+| 含网关名 | 41.8 ms |
+| 网关名排除 + 结果按 revision 缓存 | 0.02 ms |
+
+顺带修掉了上面那行幽灵家族：网关名不再被归给任何包。`diskScan: "off"` 可以直接
+关掉磁盘扫描，此时认不出的名字交给 `unknownOwnerPolicy` 处理。
+
+### 其余修正
+
+- **提示词归属**同样改走 carrier。此前每个提示词段都被记到本插件名下。
+- **dispose 恢复**：`service[method] === wrapper` 永远为假（每次属性访问都返回新的
+  proxy），所以恢复从来没执行过，包装器会一直留着让下次挂载再叠一层。改为无条件恢复。
+- **`knownNames()`** 改用 `tools.view(scope).knownNames`。原来用 `schemas()`，
+  后者会把每个工具的参数字典深拷贝一遍，而它每次装配都要跑。
+- **`syncGateways()`** 改为按名字差量同步。原来任何一处变动都整批 dispose + 重新注册。
+- **`isConcurrencySafe`** 带上调用方 agent 的 scope。原来无 scope 查询只看全局层，
+  作用域内注册的成员会被读成不存在，并发委托对最需要它的家族静默失效。
+- **前缀判定统一**：`@dsh-ops/` 在 `bridge.js` 里曾被当作第三方，而 `discovery.js`
+  认为它是第一方。现在只有 `ownership-channel.js` 一处定义。
+- **`residentTools`**：可以把工具钉在 wire 上，同时不让它成为某个家族的唯一成员。
+- **空家族不再占网关**：家族定义或配置覆盖里点了名、却没有注册任何工具的包（桌面
+  profile 里的 `agent`、`fs_search`），此前会拿到一个只能回答「没有成员」的网关，
+  白占 wire 两个名额。现在这类家族不挂网关，设置页也不再显示那一行。判定用的是
+  `knownNames()`（家族就是从它推出来的），不是某一个 agent 的视野 —— 后者看不到
+  作用域内注册的工具，会把有成员的家族误判为空，从而在成员被收起的同时撤掉网关。
+- **`describe()` 只读一次注册表**：13 个家族各调一次 `schemas()`（每次深拷贝全部
+  参数 schema），实测 14 次调用 / 8.6 ms → 1 次 / 0.9 ms。
+- **提示词条目可以自己声明不可摘除**：注册时传 `mutable: false`，本插件就不再
+  按名字白名单猜。宿主不解释这个字段（只是原样保存注册对象），所以这是本插件与
+  注册方之间的约定；判定读的是实时注册项，注册后再改也立即生效。
+
+### 设置页
+
+- 每行多一个 `reason`（`ready` / `no-switch` / `master-off` / `requires-collapse` /
+  `required-only` / `no-family` / `unowned` / `no-prose`），灰显时会说清是哪一条不满足。
+- 新增 `ungrouped[]`：列出「在 wire 上但不属于任何家族」的工具及其原因
+  （`resident` / `mcp` / `unowned`）。此前这些工具在哪都没出现，看起来像插件没干活。
+- bridge 负载 `schemaVersion` 升到 2；会话记录 `RECORD_SCHEMA_VERSION` 同样升到 2，
+  但仍能读 v1（agent 行结构没变，拒读只会让升级后恢复的会话全部展开）。
