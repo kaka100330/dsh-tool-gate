@@ -228,7 +228,7 @@ scripts/gen-attribution.mjs         重新生成工具归属表（顺便把包�
 scripts/gen-prompt-attribution.mjs  重新生成提示词归属表（装新插件后跑一次）
 scripts/dev-link.mjs                把宿主包 junction 到本地 node_modules（仅开发/测试）
 test/run.mjs                        单元测试
-test/e2e.mjs                        端到端（fake host 驱动真实 apply()，13 个场景）
+test/e2e.mjs                        端到端（fake host 驱动真实 apply()，15 个场景）
 test/client.mjs                     渲染冒烟：用最小 React shim 跑一遍设置页组件
 ```
 
@@ -304,12 +304,47 @@ wire 上的工具：**58** 个（36 CORE + 7 OPS + 5 Context + 10 网关），�
 
 ```
 node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>   # 只需一次
-node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record / 归属通道
+node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record / 归属通道 / 开关迁移
 node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，15 个场景（含 refreshContext、作用域注册、自我污染回归）
 node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓出悬空变量与 hook 顺序问题
 ```
 
 ## 0.5.0 的改动
+
+### 设置页合并成一个列表
+
+此前页面有两段列表：一段是家族折叠（12 行），一段是提示词披露（42 行）。两者说的是
+同一批东西——**一个家族就是它的插件包**（发现逻辑按包派生家族），于是同一个实体出现
+两次，用户要在两处回答同一个问题。而 42 个插件行里只有 4 行真的可用，其余全是灰的。
+
+0.5.0 把两段并成一段：一行 = 一个家族，折叠开关在右侧，提示词开关在行内第二行。
+
+```jsonc
+// families[] 每行新增
+"promptDisclosure": {
+  "available": true,                    // 现在打开是否真的会做事
+  "reason": "ready",                    // ready|master-off|requires-collapse|required-only|no-family|unowned|no-prose
+  "chars": 2576,                        // 该家族贡献给提示词的字符数
+  "names": ["free-search:engines"],
+  "required": false,
+  "enabled": true,                      // 开关自己的位置（与 available 分开）
+  "hasText": true
+}
+// 顶层新增，只读；plugins[] 不再存在
+"ungrouped": [
+  { "package": "@deepseek-ai/dsh-tool-goal", "reason": "resident", "chars": 1056, "enabled": null }
+]
+```
+
+`reason` 与 `enabled` 是**两件事**：前者说开关能不能用，后者说它现在在哪一边。
+一个家族开了披露又被重新展开时，开关仍然是「开」的——否则用户的设置就凭空消失了。
+
+无家族的包（工具全常驻、或只注入提示词不注册工具）进 `ungrouped`，只读列出：它们仍
+可能在往提示词里注入内容，藏起来会让人以为是漏了；但也不给一个翻不动、看着像坏的开关。
+
+配置随之升到 v2：`families[id].promptDisclosure: boolean` 取代 `promptPlugins[pkg].enabled`。
+`lib/migrate.js` 在家族表解析之后跑一次幂等迁移，把 v1 的非空开关折到对应家族上再清空旧键
+（无家族的包 drop 并记 debug 日志）。迁移之后只读家族标志，一个开关不再有两个真相。
 
 ### 归属改为读 carrier，栈回溯降为兜底
 

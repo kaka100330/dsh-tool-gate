@@ -831,6 +831,27 @@ const plain = (config) => {
     promptPlugins: { "dsh-free-search": { enabled: true }, "dsh-image-gen": { enabled: true } },
   });
   plugin.apply(host.ctx, live);
+  // The config above is written the v1 way — one switch per package. `apply` must
+  // fold those onto the families before the first assembly, or the prose would
+  // never be withheld. That is asserted here rather than only implied by the
+  // blanking below, so a migration that silently stops running is caught.
+  const migratedFamilies = live.families.get();
+  assert.equal(
+    migratedFamilies?.free_search?.promptDisclosure,
+    true,
+    "the search package's v1 switch was folded onto its family",
+  );
+  assert.equal(
+    migratedFamilies?.image_gen?.promptDisclosure,
+    true,
+    "and so was the image package's",
+  );
+  assert.equal(
+    live.promptPlugins.get()?.["dsh-free-search"]?.enabled,
+    false,
+    "and the legacy entry is switched off, so one switch has one source of truth",
+  );
+
   const agent = { id: "s10", session: { log: [] } };
   host.agents.push(agent);
 
@@ -1017,34 +1038,55 @@ const plain = (config) => {
       `hidden must mirror membership (family ${family.id}, count ${family.count})`,
     );
   }
-  assert.ok(
-    value.plugins.some((pluginRow) => pluginRow.package === "dsh-free-search"),
-    "the injected prompt text is attributed to its plugin",
-  );
-  // Schema v2 adds the two things the page needs to explain itself: why a row is
-  // greyed out, and which tools are on the wire in no family.
-  assert.equal(value.schemaVersion, 2, "the payload is the documented v2 shape");
-  assert.ok(Array.isArray(value.ungrouped), "ungrouped tools are reported, not silently dropped");
-  for (const ungrouped of value.ungrouped) {
-    assert.equal(typeof ungrouped.name, "string");
+  // The merge: a family carries its own prompt switch, so the page never has to
+  // cross-reference a second list to answer "does this family disclose?".
+  for (const family of value.families) {
+    const prompt = family.promptDisclosure;
+    assert.equal(typeof prompt, "object", `${family.id} carries a promptDisclosure row`);
+    assert.equal(typeof prompt.available, "boolean", `${family.id}: available is a boolean`);
+    assert.equal(typeof prompt.chars, "number", `${family.id}: chars is a number`);
+    assert.ok(Array.isArray(prompt.names), `${family.id}: names is an array`);
     assert.ok(
-      ["resident", "mcp", "unowned"].includes(ungrouped.reason),
+      ["ready", "master-off", "requires-collapse", "required-only", "no-family", "unowned", "no-prose"]
+        .includes(prompt.reason),
+      `unknown prompt reason on ${family.id}: ${prompt.reason}`,
+    );
+    // A switch is only honest when turning it on does something today.
+    assert.equal(prompt.available, prompt.reason === "ready", `${family.id}: available must follow reason`);
+    // `enabled` is the switch's position, not its usability — a family that was
+    // switched on and then expanded must still report on.
+    assert.equal(typeof prompt.enabled, "boolean", `${family.id}: enabled is a boolean`);
+  }
+  // `dsh-free-search` injects a section here but registers no tool, so it has no
+  // family and no gateway could carry its prose. That is exactly the case the
+  // read-only list exists for: the text must stay visible, without offering a
+  // switch that cannot do anything.
+  const freeSearch = value.ungrouped.find((row) => row.package === "dsh-free-search");
+  assert.ok(freeSearch !== undefined, "a package with prose but no family is still listed");
+  assert.equal(freeSearch.reason, "no-tools", "and says why it has no switch");
+  assert.ok(freeSearch.chars > 0, "and reports the prose it contributes");
+  assert.ok(freeSearch.names.includes("free-search:engines"), "and the section names");
+  assert.equal(freeSearch.enabled, null, "with no switch to flip");
+
+  // Schema v2: no second list, and the packages that have no family are reported
+  // read-only so their prompt weight stays visible.
+  assert.equal(value.schemaVersion, 2, "the payload is the documented v2 shape");
+  assert.equal(value.plugins, undefined, "the separate plugin list is gone");
+  assert.equal(value.promptPlugins, undefined, "and so is its config dict");
+  assert.ok(Array.isArray(value.ungrouped), "ungrouped packages are reported, not silently dropped");
+  for (const ungrouped of value.ungrouped) {
+    assert.equal(typeof ungrouped.package, "string", "an ungrouped row names a package");
+    assert.ok(
+      ["resident", "no-tools", "unowned"].includes(ungrouped.reason),
       `unknown ungrouped reason: ${ungrouped.reason}`,
     );
+    assert.equal(ungrouped.enabled, null, `${ungrouped.package} offers no switch`);
   }
-  assert.ok(
-    value.ungrouped.every((row) => row.name !== "read" || row.reason === "resident"),
-    "a harness tool that is resident by design says so",
+  assert.equal(
+    value.families.some((family) => (family.packages ?? []).includes(value.ungrouped[0]?.package)),
+    false,
+    "an ungrouped package belongs to no family row",
   );
-  for (const pluginRow of value.plugins) {
-    assert.equal(typeof pluginRow.reason, "string", `${pluginRow.package} states a reason`);
-    // The row's switch must agree with its reason: only `ready` is switchable.
-    assert.equal(
-      pluginRow.disclosureAvailable,
-      pluginRow.reason === "ready",
-      `${pluginRow.package}: disclosureAvailable must follow reason`,
-    );
-  }
   assert.ok(
     value.config.diskScan === "on" || value.config.diskScan === "off",
     "the page can read the scan switch",
@@ -1162,18 +1204,21 @@ const plain = (config) => {
     { writeHead: () => {}, end: (body) => { payload = JSON.parse(body); } },
   );
 
-  const self = payload.value.plugins.find((row) => row.package === "dsh-tool-gate");
-  assert.ok(!self || self.toolCount === 0, "the gate claims no tools of its own");
-  assert.ok(
-    self === undefined || (self.names ?? []).length === 0,
-    `the gate claims no prompt sections of its own (got ${(self?.names ?? []).join(",")})`,
-  );
-  const gadgets = payload.value.plugins.find((row) => row.package === "dsh-acme-gadgets");
-  assert.ok(gadgets !== undefined, "the real owner is listed instead");
-  assert.equal(gadgets.toolCount, 2, "with exactly its own tools");
+  // Self-pollution used to look like one row for this plugin carrying every
+  // other plugin's tool names. With the lists merged there are two places it
+  // could show up: an ungrouped row of its own, or a family named after it.
+  const self = payload.value.ungrouped.find((row) => row.package === "dsh-tool-gate");
+  assert.equal(self, undefined, `the gate must not list itself (got ${JSON.stringify(self)})`);
   assert.ok(
     !payload.value.families.some((family) => family.id === "dsh-tool-gate"),
     "and the gate never becomes a family of its own",
+  );
+  const gadgets = payload.value.families.find((family) => (family.packages ?? []).includes("dsh-acme-gadgets"));
+  assert.ok(gadgets !== undefined, "the real owner is listed instead");
+  assert.deepEqual(
+    gadgets.members,
+    ["acme_gadget_a", "acme_gadget_b"],
+    "with exactly its own tools, not somebody else's",
   );
   console.log("OK attribution never self-pollutes");
 }

@@ -350,6 +350,59 @@ assert.equal(agentRowOf(record, "zzz"), undefined);
 }
 console.log("OK gate record");
 
+// ——— prompt switches are folded onto their families ————————————————————
+// A profile written before the merge has one switch per package. The page now
+// renders one switch per family, so those entries must be rewritten once, and
+// only the family flag consulted afterwards — otherwise turning the merged switch
+// off would clear one source of truth while another kept it on.
+{
+  const { migratePromptPlugins } = await import(at("lib/migrate.js"));
+  /** A config field shaped like the Loader's volatile reference. */
+  const ref = (initial) => {
+    let current = initial;
+    const symbol = Object.getOwnPropertySymbols({ [Symbol.for("cosmokit.volatile.write")]: 1 })
+      .find((entry) => String(entry).includes("cosmokit.volatile.write"));
+    return Object.freeze({ get: () => current, [symbol]: (next) => { current = next; } });
+  };
+
+  const config = {
+    promptPlugins: ref({
+      "dsh-free-search": { enabled: true },
+      "dsh-image-gen": { enabled: true },
+      "dsh-ghost": { enabled: true },
+    }),
+    families: ref({}),
+  };
+  const families = {
+    free_search: { id: "free_search", packages: ["dsh-free-search"] },
+    image_gen: { id: "image_gen", packages: ["dsh-image-gen"] },
+  };
+
+  const result = migratePromptPlugins({ config, families });
+  assert.equal(result.migrated, true, "an enabled v1 switch is migrated");
+  assert.deepEqual(result.moved.sort(), ["free_search", "image_gen"], "onto the families that own the packages");
+  assert.deepEqual(result.dropped, ["dsh-ghost"], "a package with no family is dropped, not invented");
+  assert.equal(config.families.get().free_search.promptDisclosure, true, "the family flag is written");
+  assert.equal(config.families.get().image_gen.promptDisclosure, true);
+  assert.equal(
+    config.promptPlugins.get()["dsh-free-search"].enabled,
+    false,
+    "and the legacy switch is cleared so only one source of truth survives",
+  );
+
+  // Idempotent: a second run finds nothing enabled and changes nothing.
+  const again = migratePromptPlugins({ config, families });
+  assert.equal(again.migrated, false, "a migrated config is left alone");
+  assert.deepEqual(again.moved, []);
+  assert.deepEqual(again.dropped, [], "and does not re-report the dropped package");
+
+  // A config with no legacy switches is untouched.
+  const clean = { promptPlugins: ref({}), families: ref({}) };
+  assert.equal(migratePromptPlugins({ config: clean, families }).migrated, false, "nothing to do");
+  console.log("OK prompt switch migration");
+}
+
+
 // ——— framework packages are infrastructure, not plugins ———————————————
 // `@deepseek-ai/cordis` is the DI framework itself: a tool registered from inside
 // one of its effects walks through framework frames, so the nearest package.json

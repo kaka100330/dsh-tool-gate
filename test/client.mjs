@@ -130,25 +130,33 @@ function render(node, depth = 0) {
 // ——— the host-side pieces the page talks to ————————————————————————
 const families = [
   { id: "blender", label: "Blender", description: "3D", builtin: false, enabled: true, count: 15, tokens: 8415,
-    members: ["blender_rt_do", "blender_viewport"], gateway: "blender", packages: ["dsh-blender-plugin"], prefixes: [] },
+    members: ["blender_rt_do", "blender_viewport"], gateway: "blender", packages: ["dsh-blender-plugin"], prefixes: [],
+    promptDisclosure: { available: false, reason: "no-prose", chars: 0, names: [], required: false, enabled: false, hasText: false } },
+  { id: "free_search", label: "搜索", description: "", builtin: false, enabled: true, count: 9, tokens: 2576,
+    members: ["free_search_query"], gateway: "free_search", packages: ["dsh-free-search"], prefixes: [],
+    promptDisclosure: { available: true, reason: "ready", chars: 2576, names: ["free-search:engines"], required: false,
+      enabled: true, hasText: true } },
   { id: "session", label: "会话检索", description: "检索历史会话", builtin: true, enabled: true, count: 5, tokens: 1242,
-    members: ["session_search"], gateway: "session", packages: ["@deepseek-ai/dsh-tool-session-query"], prefixes: [] },
+    members: ["session_search"], gateway: "session", packages: ["@deepseek-ai/dsh-tool-session-query"], prefixes: [],
+    promptDisclosure: { available: false, reason: "required-only", chars: 630, names: ["session:help"], required: true,
+      enabled: false, hasText: true } },
   // A family whose plugin registers no tool: its gateway is not mounted, so the
   // row must not appear. "0 个工具 · 网关 agent" reads like a broken plugin.
   { id: "agent", label: "Agent 内核", description: "", builtin: true, enabled: true, count: 0, tokens: 0,
-    members: [], gateway: "agent", packages: ["@deepseek-ai/dsh-agent"], prefixes: [], hidden: true },
+    members: [], gateway: "agent", packages: ["@deepseek-ai/dsh-agent"], prefixes: [], hidden: true,
+    promptDisclosure: { available: false, reason: "no-prose", chars: 0, names: [], required: false, enabled: false } },
 ];
-const plugins = [
-  { package: "dsh-free-search", thirdParty: true, families: ["search"], toolCount: 9, names: ["free-search:engines"],
-    required: false, chars: 2576, disclosureAvailable: true, enabled: true },
-  { package: "dsh-blender-plugin", thirdParty: true, families: ["blender"], toolCount: 15, names: [],
-    required: false, chars: 0, disclosureAvailable: false, enabled: false },
-  { package: "@deepseek-ai/dsh-tool-workflow", thirdParty: false, families: [], toolCount: 1, names: ["tool:workflow"],
-    required: false, chars: 650, disclosureAvailable: false, enabled: false },
+// Packages with no family: read-only, but still shown so their prompt weight is
+// visible rather than silently dropped.
+const ungrouped = [
+  { package: "@deepseek-ai/dsh-tool-goal", thirdParty: false, reason: "resident", toolCount: 3, chars: 1056,
+    names: ["tool:goal"], enabled: null },
+  { package: "@deepseek-ai/dsh-client-ui-deliverables", thirdParty: false, reason: "no-tools", toolCount: 0,
+    chars: 2608, names: ["deliverables:ui"], enabled: null },
 ];
 const payload = {
   schemaVersion: 1, enabled: true, builtinFamilies: true, promptDisclosure: true,
-  wireToolCount: 58, savedTokens: 31725, families, plugins, promptPlugins: {},
+  wireToolCount: 58, savedTokens: 31725, families, ungrouped,
   config: { listDetail: true, staticNotice: true, interceptDirectCalls: true, guardFallback: true,
     concurrencyDelegate: false, freeze: true, unknownOwnerPolicy: "expose", gatewayPrefix: "" },
 };
@@ -232,19 +240,35 @@ await new Promise((resolve) => setTimeout(resolve, 0));
 cursor = 0;
 const page = render(h(component, { view: "page", form }));
 
-// The rows the user asked for must be present in the output.
-assert.match(page, /家族/, "the family section renders");
+// One header for one list: the whole point of the merge is that families and
+// their prompt switches are not two separate lists the user has to reconcile.
+assert.ok(page.includes("家族折叠与提示词披露"), "the merged section header renders");
+assert.equal(
+  page.split("家族折叠与提示词披露").length - 1,
+  1,
+  "there is exactly one such header, not one per list",
+);
+
 assert.match(page, /Blender/, "a third-party family is listed");
 assert.match(page, /会话检索/, "a builtin family is listed");
-assert.match(page, /提示词披露/, "the disclosure section renders");
-assert.match(page, /dsh-free-search/, "a disclosable plugin is listed");
-assert.match(page, /dsh-blender-plugin/, "a plugin with no prose still gets a row");
-assert.match(page, /无注入/, "a plugin with no prose says so");
-assert.match(page, /内置/, "a first-party plugin is labelled");
-assert.match(page, /不可披露/, "a plugin that cannot be disclosed says so");
+assert.match(page, /提示词随 list 披露/, "the prompt sub-switch sits on the family row");
+// The switch belongs to a family row, so the prose it governs is described on
+// that same row rather than in a separate plugin list.
+assert.ok(page.includes("约 2576 字符"), "a family with prose says how much");
+assert.ok(page.includes("永不摘除"), "a family whose prose is required says so");
+assert.ok(page.includes("无注入"), "a family with no prose says so");
+assert.match(page, /内置/, "a first-party family is labelled");
+
+// Packages with no family stay visible, read-only: the user must be able to see
+// that they inject text without a switch being offered that does nothing.
+assert.match(page, /未参与折叠/, "ungrouped packages get their own read-only section");
+assert.match(page, /@deepseek-ai\/dsh-tool-goal/, "a resident package is listed");
+assert.match(page, /dsh-client-ui-deliverables/, "a prompt-only package is listed");
+assert.match(page, /工具全部常驻/, "and says why it has no switch");
+assert.match(page, /只读/, "and is marked read-only");
+
 assert.match(page, /wire 上 58 个工具/, "the summary line reports the live wire count");
 assert.equal(/Agent 内核/.test(page), false, "a family with no members is not rendered as a row");
-assert.match(page, /Blender/, "the populated families are still rendered beside it");
 assert.ok(styleNodes.length === 1, "the stylesheet is injected exactly once");
 
-console.log("OK client renders: family rows, every-plugin rows, badges, summary line");
+console.log("OK client renders: one merged list, read-only ungrouped rows, badges, summary line");
