@@ -139,6 +139,32 @@ assert.deepEqual(Object.keys(fam.resolveFamilies({}, { owners, auto: false })), 
   // back to a brand capitalisation: `families.github.label: GitHub`.
   const branded = fam.resolveFamilies({ github: { label: "GitHub" } }, { owners });
   assert.equal(branded.github.label, "GitHub", "a configured label still wins");
+
+  // A family the config is the sole author of (no derived row to patch) takes the
+  // same overrides. Configuration outranks every derived value, so it cannot only
+  // work on families that already exist — that asymmetry is how a config-only
+  // family ends up unable to be named or given a short gateway name.
+  const authored = fam.resolveFamilies(
+    {
+      acme_widgets: {
+        label: "Acme",
+        description: "手写的说明",
+        gateway: "acme",
+        enabled: false,
+        packages: ["dsh-acme-widgets"],
+      },
+    },
+    { owners: {} },
+  );
+  assert.equal(authored.acme_widgets.label, "Acme", "a config-authored family takes its label");
+  assert.equal(authored.acme_widgets.description, "手写的说明", "and its description");
+  assert.equal(authored.acme_widgets.descriptionSource, "override", "attributed to the config");
+  assert.equal(fam.gatewayName("", "acme_widgets", authored.acme_widgets.gateway), "acme", "and its gateway name");
+  assert.equal(authored.acme_widgets.enabled, false, "including being switched off");
+  // Without an override it is still a family, still derived-named, still on.
+  const plain = fam.resolveFamilies({ acme_widgets: { packages: ["dsh-acme-widgets"] } }, { owners: {} });
+  assert.equal(plain.acme_widgets.label, "Acme Widgets", "derived when the config says nothing");
+  assert.equal(plain.acme_widgets.enabled, true);
   console.log("OK description sources");
 }
 // Builtin members are no longer unconditionally resident.
