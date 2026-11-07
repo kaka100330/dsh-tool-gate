@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -75,7 +76,11 @@ assert.deepEqual(Object.keys(families).sort(), [
 assert.deepEqual(families.mcp_servers.prefixes, ["mcp__"]);
 assert.equal(families.session_query.builtin, true, "first-party packages are builtin");
 assert.equal(families.blender_plugin.builtin, false, "third-party packages are not");
-assert.equal(families.session_query.gateway, "session", "a label hint may shorten the gateway name");
+// No family carries a short gateway name any more: the wire name *is* the family
+// id, so `session_query` and `session_query2` cannot collide in one namespace and
+// the roster always matches the page.
+assert.equal(families.session_query.gateway, undefined, "the gateway name is the family id");
+assert.equal(families.session_query.label, "Session Query", "the label comes from the package name");
 // The group switch gates every first-party family independently of its own switch.
 assert.equal(fam.resolveFamilies({}, { owners, builtinEnabled: false }).session_query, undefined);
 assert.equal(fam.resolveFamilies({}, { owners, builtinEnabled: false }).blender_plugin.enabled, true);
@@ -96,9 +101,11 @@ assert.deepEqual(Object.keys(fam.resolveFamilies({}, { owners, auto: false })), 
   });
   assert.equal(withMeta.github.description, "GitHub PRs, reviews and CI", "the host's text replaces the table row");
   assert.equal(withMeta.github.descriptionSource, "metaOf", "and the family records which layer answered");
-  // A package the host knows nothing about still falls back to the table.
-  assert.equal(withMeta.blender_plugin.description, "Blender 3D modeling, rendering, QC and delivery");
-  assert.equal(withMeta.blender_plugin.descriptionSource, "hint");
+  // There is no fallback table any more: a package the host cannot describe
+  // carries an empty description and says so, rather than an invented sentence
+  // that can drift away from the package.
+  assert.equal(withMeta.blender_plugin.description, "");
+  assert.equal(withMeta.blender_plugin.descriptionSource, "none");
   // An id with nothing anywhere is honestly empty rather than invented.
   assert.equal(withMeta.some_future_plugin.description, "");
   assert.equal(withMeta.some_future_plugin.descriptionSource, "none");
@@ -111,19 +118,27 @@ assert.deepEqual(Object.keys(fam.resolveFamilies({}, { owners, auto: false })), 
   assert.equal(overridden.github.description, "覆盖", "the user's description wins");
   assert.equal(overridden.github.descriptionSource, "override");
 
-  // Without a metadata reader the table's text is what shows, unchanged.
-  assert.equal(fam.resolveFamilies({}, { owners }).github.description, "GitHub repositories, issues, pull requests and reviews");
+  // Without a metadata reader there is nothing to show, and nothing is invented.
+  assert.equal(fam.resolveFamilies({}, { owners }).github.description, "");
+  assert.equal(fam.resolveFamilies({}, { owners }).github.descriptionSource, "none");
 
-  // A label keeps its fallback chain: table -> humanized id. Third-party host
-  // titles are usually the package name, so a bare id must still read well.
+  // The label is derived from the package name — `some-future-plugin` was never in
+  // any table, and it still reads properly.
   assert.equal(fam.resolveFamilies({}, { owners }).some_future_plugin.label, "Some Future Plugin");
+  assert.equal(fam.resolveFamilies({}, { owners }).blender_plugin.label, "Blender Plugin");
+  assert.equal(fam.resolveFamilies({}, { owners }).github.label, "Github", "the package name, capitalised — not the brand");
   assert.equal(
     fam.resolveFamilies({}, { owners, metadata: () => ({ title: "文件读写工具" }) }).fs?.label,
     undefined,
     "no family is invented for a package with no tools",
   );
   const withFs = fam.resolveFamilies({}, { owners: { read_file: "@deepseek-ai/dsh-tool-fs" }, metadata: () => ({ title: "文件读写工具" }) });
-  assert.equal(withFs.fs.label, "文件读写工具", "the host's localized title is used when the table has none");
+  assert.equal(withFs.fs.label, "FS", "acronyms stay upper-case; the host's title does not participate");
+  // The host's localized title is what turned `Hindsight` into the capability word
+  // `记忆`, so it is not a label source at all any more. The override is the way
+  // back to a brand capitalisation: `families.github.label: GitHub`.
+  const branded = fam.resolveFamilies({ github: { label: "GitHub" } }, { owners });
+  assert.equal(branded.github.label, "GitHub", "a configured label still wins");
   console.log("OK description sources");
 }
 // Builtin members are no longer unconditionally resident.
@@ -236,8 +251,8 @@ const runtime = {
   labelFor: (id) => families[id]?.label || id,
 };
 
-const gateway = createGateway({ family: families.blender_plugin, name: "blender", runtime });
-assert.equal(gateway.name, "blender");
+const gateway = createGateway({ family: families.blender_plugin, name: "blender_plugin", runtime });
+assert.equal(gateway.name, "blender_plugin");
 assert.equal(typeof gateway.execute, "function");
 assert.equal(typeof gateway.output.render, "function");
 // The usage contract belongs to the system-prompt notice, said once — not to
@@ -247,13 +262,26 @@ assert.equal(
   false,
   "the gateway description carries no shared boilerplate",
 );
-assert.match(gateway.description, /^网关 · Blender：/, "it says what this family is for, in one line");
-assert.ok(gateway.description.length < 120, `the description stays short (${gateway.description.length} bytes)`);
+assert.match(gateway.description, /^网关 · Blender Plugin/, "it names the family in one line");
+// With no description from the host there is no colon and no invented sentence.
+assert.equal(gateway.description, "网关 · Blender Plugin", "an undescribed family still gets a usable line");
+// No length ceiling: the description is whatever the plugin says about itself.
+// A fixed column used to cut the longest ones mid-clause, and the clause it cut
+// was the one saying what the plugin is *for*.
+{
+  const long = "x".repeat(400);
+  const longGateway = createGateway({
+    family: { id: "long", label: "Long", description: long },
+    name: "long",
+    runtime,
+  });
+  assert.ok(longGateway.description.includes(long), "the whole description is kept");
+}
 // With the notice switched off, nothing else tells the model this tool is a
 // gateway, so the description has to say so itself.
 const selfExplaining = createGateway({
   family: families.blender_plugin,
-  name: "blender",
+  name: "blender_plugin",
   runtime: { ...runtime, config: () => plain(Config({ enabled: true, staticNotice: false })) },
 });
 assert.match(selfExplaining.description, /action="list"/, "self-explaining when no notice is present");
@@ -624,29 +652,189 @@ console.log("OK gate record");
   console.log("OK scan hot path");
 }
 
-// ——— summarize: one sentence, cut by code point ————————————————————
+// ——— the scan index invalidates itself when a plugin is installed ————
+// The index used to be keyed on the profile root alone, with a comment claiming
+// it "changes only on install" — while nothing on install told it so. A plugin
+// enabled by another process therefore stayed invisible until a restart.
+{
+  const os = await import("node:os");
+  const { scanForOwners } = await import(at("lib/tool-scan.js"));
+  const NL = String.fromCharCode(10);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-gate-scan-"));
+  const writeBundle = (specifier, toolName) => {
+    const dir = path.join(root, "node_modules", specifier);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: specifier }));
+    fs.writeFileSync(path.join(dir, "tools.js"),
+      `export const definitions = [${NL}  { name: "${toolName}" },${NL}];${NL}`);
+  };
+  const manifest = (bundles) => {
+    fs.writeFileSync(path.join(root, "package.json"),
+      JSON.stringify({ name: "probe-profile", dsh: { profile: { bundles } } }));
+  };
+
+  writeBundle("dsh-first", "alpha_tool");
+  manifest(["dsh-first"]);
+  // A fresh root is always read: its stamp has never been seen.
+  assert.deepEqual(scanForOwners(new Set(["alpha_tool"]), undefined, root), { alpha_tool: "dsh-first" });
+  // A name no bundle claims is answered from the cached plan — no second read.
+  assert.deepEqual(scanForOwners(new Set(["beta_tool"]), undefined, root), {});
+
+  // Installing a bundle rewrites the profile manifest (it *is* the bundle list),
+  // which moves the stamp — so the index rebuilds itself with no help from anyone.
+  writeBundle("dsh-second", "beta_tool");
+  manifest(["dsh-first", "dsh-second"]);
+  assert.deepEqual(scanForOwners(new Set(["beta_tool"]), undefined, root), { beta_tool: "dsh-second" },
+    "a newly installed bundle is visible without forgetScanCache()");
+  assert.deepEqual(scanForOwners(new Set(["alpha_tool"]), undefined, root), { alpha_tool: "dsh-first" },
+    "and the old one is still placed");
+
+  fs.rmSync(root, { recursive: true, force: true });
+  console.log("OK scan index self-invalidates");
+}
+
+// ——— ownerIndex.forget(): drop the disk-derived answer, keep the live facts ——
+// `registered()` memoizes on a revision counter that only moves when *this
+// process* observes a change. The scan fingerprint (see above) already catches
+// the common case — a bundle installed by another process rewrites the profile
+// manifest. `forget()` is the explicit escape hatch for everything the stamp
+// cannot see (a same-size rewrite inside one mtime tick, a package swapped in
+// place), and it is what POST /refresh calls.
+{
+  const os = await import("node:os");
+  const { createOwnerIndex, UNKNOWN } = await import(at("lib/owner.js"));
+  const { forgetScanCache } = await import(at("lib/tool-scan.js"));
+  const NL = String.fromCharCode(10);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-gate-forget-"));
+  const bundle = (specifier, toolName) => {
+    const dir = path.join(root, "node_modules", specifier);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: specifier }));
+    fs.writeFileSync(path.join(dir, "tools.js"), `export const definitions = [${NL}  { name: "${toolName}" },${NL}];${NL}`);
+  };
+  const writeProfile = (bundles) => {
+    fs.writeFileSync(path.join(root, "package.json"),
+      JSON.stringify({ name: "probe-profile", dsh: { profile: { bundles } } }));
+  };
+  const previousProfile = process.env.DSH_PROFILE_DIR;
+  process.env.DSH_PROFILE_DIR = root;
+  try {
+    bundle("dsh-first", "alpha_tool");
+    writeProfile(["dsh-first"]);
+
+    const tools = {
+      register: () => () => {},
+      layers: { global: { tools: { entries: () => new Map() } }, scoped: new Map() },
+    };
+    const ctx = {
+      tools,
+      on: () => () => {},
+      effect: (factory) => factory(),
+      get: (name) => (name === "tools" ? tools : undefined),
+    };
+    const index = createOwnerIndex(ctx, undefined, { diskScan: true });
+    const first = index.registered(new Set(["alpha_tool", "ghost_tool"]));
+    assert.deepEqual(first, { alpha_tool: "dsh-first" }, "a scanned owner is learned");
+    // The memo key carries the revision, and a scan that *learns* something bumps
+    // it — so the second identical call re-derives once and is cached from then on.
+    const second = index.registered(new Set(["alpha_tool", "ghost_tool"]));
+    assert.deepEqual(second, first);
+    assert.equal(index.registered(new Set(["alpha_tool", "ghost_tool"])), second,
+      "an unchanged query is memoized, not rescanned");
+
+    // A second plugin arrives while this process runs. The manifest moves, so the
+    // scan index rebuilds itself and `registered()` already sees it — no forget().
+    bundle("dsh-second", "beta_tool");
+    writeProfile(["dsh-first", "dsh-second"]);
+    assert.deepEqual(index.registered(new Set(["beta_tool"])), { beta_tool: "dsh-second" },
+      "an install from another process is picked up by the manifest fingerprint alone");
+
+    // `forget()` is still the escape hatch for what a stamp cannot see: it drops
+    // the memoized answer and forces the next call back through the scan.
+    const scans = new Set(["alpha_tool", "beta_tool"]);
+    index.forget();
+    assert.deepEqual(index.registered(new Set(["alpha_tool", "beta_tool"])),
+      { alpha_tool: "dsh-first", beta_tool: "dsh-second" },
+      "and forget() re-derives the same answers");
+    index.forget();
+    assert.deepEqual(index.registered(scans), { alpha_tool: "dsh-first", beta_tool: "dsh-second" },
+      "calling it twice is harmless");
+
+    // What it must NOT clear: the ownership learned from live registrations, and
+    // the names that were already present at mount. Those are facts about this
+    // process, not a cache of the filesystem.
+    assert.equal(index.ownerOf("alpha_tool"), "dsh-first", "scanned ownership survives");
+    index.dispose();
+  } finally {
+    if (previousProfile === undefined) delete process.env.DSH_PROFILE_DIR;
+    else process.env.DSH_PROFILE_DIR = previousProfile;
+    forgetScanCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  console.log("OK owner forget");
+}
+
+// ——— the label is derived from the package name, never from a table ————
+{
+  const { rawLabelOf } = await import(at("lib/family-labels.js"));
+  const cases = {
+    "dsh-blender-plugin": "Blender Plugin",
+    "@perrylink/dsh-github": "Github",
+    "@deepseek-ai/dsh-tool-session-query": "Session Query",
+    "@deepseek-ai/dsh-tool-fs": "FS",
+    "dsh-tool-fs-search": "FS Search",
+    "@vectorize-io/hindsight-coding-agents": "Hindsight Coding Agents",
+    "dsh-image-gen": "Image Gen",
+    "dsh-mcp-connector": "MCP Connector",
+    "@deepseek-ai/dsh-tool-schedule": "Schedule",
+    "dsh-video-storyboard": "Video Storyboard",
+    "dsh-free-search": "Free Search",
+    "computer_use_win": "Computer Use Win",
+    "tavily": "Tavily",
+    "mcp_servers": "MCP Servers",
+    "acme_widgets": "Acme Widgets",
+    "dsh-plugin-thing": "Thing",
+    "plugin-thing": "Thing",
+    "dsh-tool-http-api": "HTTP API",
+  };
+  for (const [pkg, expected] of Object.entries(cases)) {
+    assert.equal(rawLabelOf(pkg), expected, `rawLabelOf(${pkg})`);
+  }
+  assert.equal(rawLabelOf(""), "", "nothing to derive answers the input");
+  assert.equal(rawLabelOf(undefined), "");
+  assert.equal(rawLabelOf("sub/deep"), "Deep", "the last path segment is the name");
+  // A prefix is only dropped when something follows it: `dsh` alone is a name.
+  assert.equal(rawLabelOf("dsh"), "Dsh");
+  console.log("OK label derivation");
+}
+
+// ——— summarize: flatten whitespace, keep every sentence ————————————
 {
   const { summarize } = await import(at("lib/plugin-meta.js"));
   assert.equal(summarize(""), "");
   assert.equal(summarize("  \n "), "");
-  // A CJK full stop ends the sentence; the rest is dropped.
-  assert.equal(summarize("第一句。第二句。"), "第一句。");
-  // A version number's period is not a sentence end.
+  // Every sentence is kept. Picking the first one used to drop the clause that
+  // said what the plugin was *for* — the opening sentence is usually the vaguest.
+  assert.equal(summarize("第一句。第二句。"), "第一句。第二句。");
+  assert.equal(summarize("First sentence. Second one."), "First sentence. Second one.");
+  // A version number's period is not a sentence end (nothing looks for one now,
+  // and this is the case that must keep working).
   assert.equal(summarize("Blender 插件 v3.0.4 直连"), "Blender 插件 v3.0.4 直连");
-  // An ASCII period followed by a space is.
-  assert.equal(summarize("First sentence. Second one."), "First sentence.");
   // Whitespace is flattened, so a multi-line description cannot reshape a tool.
   assert.equal(summarize("a\n\nb\tc"), "a b c");
-  // Overlong text is cut at a word boundary and marked.
-  const long = summarize(`${"word ".repeat(60)}end`, 40);
-  assert.ok([...long].length <= 40, "the cut respects the cap in code points");
-  assert.ok(long.endsWith("…"), "and says it was cut");
-  // Cutting must not split a surrogate pair: `[...text]` counts code points.
-  const emoji = summarize("🎨".repeat(80), 10);
-  assert.equal([...emoji].every((char) => char.codePointAt(0) !== undefined), true);
-  assert.equal(emoji.includes("\uFFFD"), false, "no replacement characters from a split pair");
-  // The cap boundary is inclusive.
-  assert.equal([...summarize("字".repeat(120), 120)].length, 120);
+  // Nothing is truncated and nothing is marked: an overlong description arrives
+  // whole, with no ellipsis.
+  const long = `${"word ".repeat(60)}end`.trim();
+  assert.equal(summarize(long), long);
+  assert.equal(summarize("🎨".repeat(80)).includes("\uFFFD"), false, "no replacement characters");
+  // The optional ceiling exists but is off by default; when asked for, it counts
+  // code points so it cannot split a surrogate pair.
+  assert.equal(summarize(long, 0), long, "0 means no ceiling");
+  const capped = summarize("🎨".repeat(80), 10);
+  assert.equal([...capped].length, 11, "10 code points plus the ellipsis");
+  assert.ok(capped.endsWith("…"));
+  assert.equal(capped.includes("\uFFFD"), false, "no replacement characters from a split pair");
+  assert.equal(summarize("字".repeat(120), 120), "字".repeat(120), "the boundary is inclusive");
   assert.ok(summarize("字".repeat(121), 120).endsWith("…"));
   console.log("OK summarize");
 }

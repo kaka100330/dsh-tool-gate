@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Tool Gate",
-    "description": "Collapse third-party tool families behind 8 stable gateway tools, so the wire tool array stays byte-identical across turns and the prompt prefix is no longer re-paid."
+    "description": "Collapse third-party tool families behind per-family gateway tools, so the wire tool array stays byte-identical across turns and the prompt prefix is no longer re-paid."
   }
 }

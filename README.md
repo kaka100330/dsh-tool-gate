@@ -10,16 +10,16 @@ DSH 把当前可见的工具定义随每个请求发给模型。工具越多，�
 
 | 家族 | 工具数 | 约 tok |
 | --- | ---: | ---: |
-| Blender | 15 | 6,725 |
-| MCP 管理 | 25 | 4,338 |
-| 图像 | 6 | 2,980 |
-| 视频 | 6 | 2,745 |
-| GitHub | 14 | 2,178 |
-| 搜索 | 9 | 1,665 |
-| 记忆 | 8 | 1,633 |
-| MCP 服务器 | 1 | 149 |
-| **会话检索**（内置） | 5 | 1,242 |
-| **日程**（内置） | 4 | 1,868 |
+| Blender Plugin | 15 | 6,725 |
+| MCP Connector | 25 | 4,338 |
+| Image Gen | 6 | 2,980 |
+| Video Storyboard | 6 | 2,745 |
+| Github | 14 | 2,178 |
+| Free Search | 9 | 1,665 |
+| Hindsight Coding Agents | 8 | 1,633 |
+| MCP Servers | 1 | 149 |
+| **Session Query**（内置） | 5 | 1,242 |
+| **Schedule**（内置） | 4 | 1,868 |
 | **收起合计** | **93** | **≈25,523** |
 
 常驻的是 36 个核心工具（约 7.5k）、7 个 OPS 工具（约 2.5k）、5 个上下文工具（约 1.2k）
@@ -42,14 +42,14 @@ DSH 把当前可见的工具定义随每个请求发给模型。工具越多，�
 装在插件页，默认 **关闭**。打开后你会看到每个启用的家族各一个网关工具，每个两个动作：
 
 ```
-blender  { action: "list" }                          → 该家族全部成员的名字、说明、完整参数
-blender  { action: "call", tool: "blender_rt_do",
-           arguments: { ... } }                      → 调用成员，返回值与直接调用一致
+blender_plugin  { action: "list" }                    → 该家族全部成员的名字、说明、完整参数
+blender_plugin  { action: "call", tool: "blender_rt_do",
+                 arguments: { ... } }                  → 调用成员，返回值与直接调用一致
 ```
 
 这两个动作的含义**只在系统提示词里说一次**（`staticNotice` 那段说明），不再重复写进
 每个网关的描述 —— 否则 12 个网关就是同一段话交 12 遍钱。网关自己的描述只说一件事：
-**这个家族是做什么的**（`网关 · Blender：…`）。关掉 `staticNotice` 时系统提示词里没有那段话，
+**这个家族是做什么的**（`网关 · Blender Plugin：…`）。关掉 `staticNotice` 时系统提示词里没有那段话，
 每个网关的描述会自动补一句最小可用说明，模型仍能自己摸到 `list`。
 
 同一会话内第二次 `list` 只回一句提示（定义已经在历史里了，不必再占一次上下文）。
@@ -60,36 +60,45 @@ blender  { action: "call", tool: "blender_rt_do",
 ## 家族
 
 **家族不是写死的。** 每个第三方插件包自动成为一个家族：本插件从工具注册处
-回溯出「哪个包注册了这个工具」，把同一包的成员归到一族，用包名推出家族 id，
-再按包名去 `lib/family-labels.js` 取一个好看的中文名（取不到就用 id 的驼峰化，
-比如 `computer_use_win` → `Computer Use Win`）。
+回溯出「哪个包注册了这个工具」，把同一包的成员归到一族，用包名推出家族 id。
 
 **网关的描述也不是写死的。** 它读宿主自己的 `pluginPackages` 服务 —— 也就是设置页
 「插件」列表显示的那段描述，同一个来源、同一套 locale 文件，所以两边永远不会打架。
-三级兜底：`metaOf`（读 `locale/*.json`，读不到再读包的 `package.json`）→ 插件清单的
-`description` → `family-labels.js` 的兜底句。**新装一个插件，它的网关立刻有描述，
-本插件的代码一行都不用改。** 设置页在描述后面标出来源（`兜底表` / `你的配置` 等），
-一眼就能看出哪个网关还在吃兜底。
+两层兜底：`metaOf`（读 `locale/*.json`，读不到再读包的 `package.json`）→ 插件清单的
+`description`。**新装一个插件，它的网关立刻有描述，本插件的代码一行都不用改。**
+描述**原样使用、不截断也不换成第一句**：插件作者写给模型的话就是模型看到的全部内容，
+截在半句上会把「这个插件是做什么的」那半句正好砍掉。设置页在描述后面标出来源
+（`metaOf` / `manifest` / `你的配置` / `无`），一眼就能看出哪个网关还是空的。
+想要上限的人可以配 `maxDescriptionChars`（默认 `0` = 不限），超长时按码点截断并加 `…`。
 
-所以**新装一个插件、重载一次，它的工具就会被收进自己的网关**，不需要改本插件的任何代码。
+所以**新装一个插件的工具会被收进它自己的网关**，不需要改本插件的任何代码。
+当前会话的 wire 是冻结的，所以插件在**下一个会话**里开始折叠——这一点是刻意的，
+中途插入一个新网关等于让提示前缀重付一次。设置页的「刷新清单」只更新你看到的那张表。
 例子（id 由包名推导）：
 
-| 包 | 家族 id | 网关 |
-| --- | --- | --- |
-| `dsh-blender-plugin` | `blender_plugin` | `blender`（`family-labels.js` 里给了短名） |
-| `@perrylink/dsh-github` | `github` | `github` |
-| `dsh-free-search` | `free_search` | `search` |
-| 未来新装的 `dsh-acme-widgets` | `acme_widgets` | `acme_widgets` |
+| 包 | 家族 id | 标签 | 网关 |
+| --- | --- | --- | --- |
+| `dsh-blender-plugin` | `blender_plugin` | `Blender Plugin` | `blender_plugin` |
+| `@perrylink/dsh-github` | `github` | `Github` | `github` |
+| `dsh-free-search` | `free_search` | `Free Search` | `free_search` |
+| `@deepseek-ai/dsh-tool-fs` | `fs` | `FS` | `fs` |
+| 未来新装的 `dsh-acme-widgets` | `acme_widgets` | `Acme Widgets` | `acme_widgets` |
 
-`lib/family-labels.js` 只负责**短名与可选网关名**（描述已改为从宿主读取）。
-删掉它也能跑，只是网关会叫 `blender_plugin` 这种 id 名、描述退回插件清单原文。
+**标签是包名的直译，不是意译。** `lib/family-labels.js` 去 `@scope` 前缀、去
+`dsh-tool-` / `dsh-plugin-` / `dsh-` / `plugin-` 前缀，按 `-_.` 切词后首字母大写，
+缩写词（`fs` `mcp` `api` `cli` `ui` `http` `url` `json` `ide`）保持全大写。
+**网关名恒等于家族 id**（除非你配了 `gateway:` 或非空 `gatewayPrefix`），
+所以 `session_query` 不会和别的 `session…` 撞在一个命名空间里，名单和页面也永远一致。
+代价是 `GitHub` 会读成 `Github`、`Blender` 会读成 `Blender Plugin`——这正是包名说的。
+想要回品牌大小写就写 `families.github.label: GitHub`，配置仍然最高优先。
+**不再读宿主 locale 的标题**：那正是 `Hindsight` 被显示成能力词「记忆」的来路。
 
 **内置家族**（按显式工具名归属，`builtinFamilies` 总开关控制，默认开）：
 
-| 家族 | 网关 | 成员 | ≈tok |
-| --- | --- | --- | --- |
-| 会话检索 | `session` | `session_search` `session_event_search` `session_event_read` `session_event_trace` `session_trace` | 1,242 |
-| 日程 | `schedule` | `schedule_create` `schedule_list` `schedule_update` `schedule_delete` | 1,868 |
+| 家族 | 标签 | 网关 | 成员 | ≈tok |
+| --- | --- | --- | --- | --- |
+| 会话检索 | `Session Query` | `session_query` | `session_search` `session_event_search` `session_event_read` `session_event_trace` `session_trace` | 1,242 |
+| 日程 | `Schedule` | `schedule` | `schedule_create` `schedule_list` `schedule_update` `schedule_delete` | 1,868 |
 
 内置家族走**显式工具名**匹配（列在 `BUILTIN_FAMILY_TOOLS`），因为它们和常驻控制面
 （`plugin_manager` 等）同属一个包，按包归属会连常驻工具一起收走 —— 这是唯一保留的
@@ -100,7 +109,8 @@ blender  { action: "call", tool: "blender_rt_do",
 
 ## 设置页
 
-插件详情页是自建页面，从宿主只读路由 `GET /api/dsh-tool-gate/describe` 取实时清单：
+插件详情页是自建页面，从宿主路由 `GET /api/dsh-tool-gate/describe` 取实时清单
+（唯一的写入口是 `POST /describe/refresh`，只重扫、不改配置）：
 
 - **总开关** —— 关闭即完全不介入。
 - **家族列表** —— 一行 = 一个家族：左侧是说明（描述 + 来源小字 + 成员数 + ≈tok + 网关名 +
@@ -111,6 +121,10 @@ blender  { action: "call", tool: "blender_rt_do",
 - **未参与折叠（只读）** —— 没有家族的第三方包，以及一行「另有 N 个内置插件的包未参与折叠」的注脚。
 - **行为细节** —— list 详细度、直呼拦截、执行期守卫、并发声明、会话内冻结、未知归属策略。
 - 底部三个批量按钮：全部家族折叠 / 全部家族常驻 / 全部插件可披露。
+- 右上角的「刷新清单」走 `POST /api/dsh-tool-gate/describe/refresh`：它会丢掉工具扫描
+  的计划缓存与归属索引，重新读盘、重建家族表，再把新快照还给页面。**装完插件不用重启，
+  点一下就能看到它。** 只影响你看到的清单：当前会话的 wire 是冻结的，新家族从**下一个会话**
+  开始折叠（这一点页面也写着，免得「装了没生效」被当成坏了）。
 
 改动即时生效，无需重启。其余项仍在 profile 的 `cordis.patch.yml` 本插件 `config` 段
 （例如 `alwaysExpose` / `alwaysHide` / `gatewayPrefix` / 家族 `packages`）：
@@ -123,9 +137,10 @@ blender  { action: "call", tool: "blender_rt_do",
     unknownOwnerPolicy: collapse   # 认不出归属的工具一并收起（默认 expose，更安全）
     alwaysExpose: [some_tool]      # 强制常驻
     alwaysHide: []                 # 强制收起
-    gatewayPrefix: ""              # 网关名前缀，留空即用家族名
-    families:
-      blender:
+    maxDescriptionChars: 0         # 网关描述的字数上限，0 = 不限（默认）
+    families:            # 键是 family id（不是网关名、不是标签）
+      blender_plugin:
+        label: Blender  # 唯一能盖掉派生标签的地方
         packages: [dsh-blender-plugin]
       mcp_servers:
         prefixes: ["mcp__"]
@@ -140,8 +155,9 @@ blender  { action: "call", tool: "blender_rt_do",
 2. **读盘扫描**（`lib/tool-scan.js`）—— 本插件挂载前就已注册完的工具，注册早已结束，
    没人观察得到。于是去问安装的包本身：谁的源码里出现 `name: "<这个工具>"`（或
    `name: 常量` + `const 常量 = "…"`），这个工具就属于谁。**装新插件不需要改本仓库
-   任何文件**，重启即生效。只扫 profile 的 bundle 列表、只查还没归属的名字，
-   一次约 0.5 秒，结果按 profile 缓存。
+   任何文件**，装上就生效。只扫 profile 的 bundle 列表、只查还没归属的名字，
+   一次约 0.5 秒（161.7 ms / 24 bundle / 1286 文件），计划按 profile 的
+   `package.json` 指纹缓存——安装必定改写它，所以不需要谁记得清缓存。
 3. **内置表**（`lib/builtin-attribution.js`，141 条）—— 第一方包的兜底，且只认
    「注册表当前真的有」的名字，避免为没装的插件造网关。
 4. **认不出** —— 按 `unknownOwnerPolicy` 决定留在 wire（默认）还是收起。
@@ -202,8 +218,8 @@ contexts.push(provider === void 0 ? accepted : resolveContext(provider, context)
 - 明确**不**承诺：`reason: "series"` 的请求头重写（goal round driver 会开新 series），
   以及模型自己要求换工具集的情况。
 - **内置家族的提示词也走同一条披露通道**：`tool:session-query` 归属
-  `@deepseek-ai/dsh-tool-session-query`，而该包已登记为 `session` 家族，所以打开它的插件开关后
-  那段说明同样只在 `session` 的 `list` 里出现。`schedule` 目前没有任何提示词贡献，因此它的开关行
+  `@deepseek-ai/dsh-tool-session-query`，而该包已登记为 `session_query` 家族，所以打开它的插件开关后
+  那段说明同样只在 `session_query` 的 `list` 里出现。`schedule` 目前没有任何提示词贡献，因此它的开关行
   会灰显并标注 `无注入`（有行、但不假装有用）。
 - **包名统一用包自己声明的名字**。`data/attribution.json` 里第一方包写的是目录名
   （`dsh-tool-fs`），而实时栈回溯拿到的是 `@deepseek-ai/dsh-tool-fs`；不归一化的话，同一个
@@ -218,6 +234,14 @@ contexts.push(provider === void 0 ? accepted : resolveContext(provider, context)
   现在 `membersOf()` 一律传 agent 作用域（`tools.schemas(agent)`），设置页读的是成员最多的那个
   作用域的视角。`test/e2e.mjs` 场景 13 专门钉住这条：作用域里注册的工具必须出现在 `list` 和
   设置页的清单里。
+- **「有没有成员」也只认作用域视野**。判定空家族曾经用 `knownNames()`——它是**不受限制**的
+  超集，被 `restrict` 掉、任何 agent 都调不到的名字仍算成员，于是 `fs_search` 这种家族照样挂上
+  网关，模型拿到一个 `list` 只能回「没有成员」的工具。现在用 `callableNames(scope)`：各 agent
+  `view(scope).visible` 的并集，只在完全没有作用域时才退化成不带作用域的视野。
+  `test/e2e.mjs` 场景 16 用 `restrict()` 造出这个局面并断言网关不会出现、页面同一行是 `hidden`。
+- **网关被撤回时会解冻**。冻结面是粘性的（这是前缀稳定的来源），所以一个中途消失的网关会一直
+  留在冻结面里，而它收起的成员又回不来。撤回时清掉 `frozen`，下一轮按当前注册表重建；
+  没有撤回的一轮不会重建（场景 17 两头都断言）。
 
 
 ## 文件
@@ -228,8 +252,8 @@ lib/config.js        schemastery Config（全字段 volatile + 中文说明 → 
 lib/owner.js         工具归属识别（实时包装 / 栈回溯 / 读盘扫描 / 内置表兜底）
 lib/tool-scan.js     读盘扫描：问已安装的包「这个工具名在哪」，装新插件不用改仓库
 lib/discovery.js     从归属快照推导家族表：一个插件包 = 一个家族
-lib/plugin-meta.js   网关描述的通用来源：读宿主的 pluginPackages（三级兜底 + mtime 缓存）
-lib/family-labels.js 家族短名与可选短网关名（描述已改为从宿主读取，这里只剩兜底句）
+lib/plugin-meta.js   网关描述的通用来源：读宿主的 pluginPackages（两层兜底 + mtime/上限缓存）
+lib/family-labels.js 标签派生（包名 → 去前缀 → title-case，缩写词大写；没有表）
 lib/ownership-channel.js  归属通道 + 包名归一化（barePackageName）与「第一方」判定
 lib/families.js      家族表装配、归属解析、冻结面构造（code-unit 排序）
 lib/gateways.js      网关的 defineTool 定义与注册（描述只说这个家族做什么）
@@ -238,13 +262,13 @@ lib/guard.js         pre-execute 拦截 + tools.guard 兜底
 lib/state.js         每个 agent 的状态、plugin record 读写
 lib/prompt-scan.js   提示词披露：三层归属、替换注册项的 text provider、文本缓存
 lib/prompt-attribution.js  生成的提示词归属快照
-lib/bridge.js        设置页只读路由 /api/dsh-tool-gate/describe
+lib/bridge.js        设置页路由：只读 GET /describe，与唯一有副作用的 POST /describe/refresh
 lib/client.js        设置页（React，无构建步骤，自建页面）
 scripts/gen-attribution.mjs         重新生成工具归属表（顺便把包名归一化）
 scripts/gen-prompt-attribution.mjs  重新生成提示词归属表（装新插件后跑一次）
 scripts/dev-link.mjs                把宿主包 junction 到本地 node_modules（仅开发/测试）
 test/run.mjs                        单元测试
-test/e2e.mjs                        端到端（fake host 驱动真实 apply()，15 个场景）
+test/e2e.mjs                        端到端（fake host 驱动真实 apply()，17 个场景）
 test/client.mjs                     渲染冒烟：用最小 React shim 跑一遍设置页组件
 ```
 
@@ -270,6 +294,12 @@ node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>
 （宿主在内存里路由），只有直接 `node test/*.mjs` 跑测试时才需要。
 
 ## 实测（desktop profile，v0.3.1 的真实会话）
+
+> 本节是 0.3.1 的原始测量，**保留原样不复算**：里面的网关名（`blender` / `mcp` /
+> `search` / `hindsight` / `image` / `session` / `video`）是 0.8.0 之前的短名，现在分别叫
+> `blender_plugin` / `mcp_connector` / `free_search` / `hindsight_coding_agents` /
+> `image_gen` / `session_query` / `video_storyboard`。数字不受影响（改名只动 label 与名字本身，
+> 见下文 0.8.0 的字节账），所以不重测。
 
 会话 `session-624ade42`，同一进程内切换插件配置后逐项测量。
 「开启前」取同一会话里那次 `reason: "change"` 的 149 工具请求头（141 个原有工具
@@ -305,7 +335,8 @@ node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>
 call 全部成功路由；其中 blender 成员自身报 `ECONNREFUSED 127.0.0.1:9876`（addon 未运行），
 属成员内部错误、原样透出，网关转发本身正常。直呼 `gh_repo` 被拦并提示改走网关。
 
-10 个家族在设置页上的实时清单（`curl /api/dsh-tool-gate/describe`，v0.4.0，家族 id 由包名推导）：
+10 个家族在设置页上的实时清单（`curl /api/dsh-tool-gate/describe`，v0.4.0，家族 id 由包名推导；
+**标签与网关名同样是 0.8.0 之前的**，id 没变）：
 `blender_plugin` 15 / 8,415 tok、`github` 14 / 2,734、`hindsight_coding_agents` 8 / 2,047、
 `image_gen` 6 / 3,730、`mcp_connector` 25 / 5,444、`mcp_servers` 1 / 187、
 **`schedule` 4 / 1,870**、`free_search` 9 / 2,088、**`session_query` 5 / 1,244**、
@@ -321,10 +352,141 @@ wire 上的工具：**58** 个（36 CORE + 7 OPS + 5 Context + 10 网关），�
 
 ```
 node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>   # 只需一次
-node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record / 归属通道 / 开关迁移
-node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，15 个场景（含 refreshContext、作用域注册、自我污染回归）
+node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record / 归属通道 / 扫描失效 / 标签派生
+node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，17 个场景（含 refreshContext、作用域注册、空网关、撤回解冻）
 node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓出悬空变量与 hook 顺序问题
 ```
+
+## 0.8.0 的改动
+
+三件事，互相独立：名字不再意译、描述不再截短、装完插件当场就能看见。
+
+### 标签从包名派生，整张表删掉
+
+0.7.0 的标签链是「短名表 → 宿主 `meta.title` → id 驼峰化」。表里那 9 行把品牌
+写成了能力词（`hindsight` → 记忆、`free_search` → 搜索、`image_gen` → 图像、
+`mcp_connector` → MCP 管理），而表的优先级又高于宿主标题——于是 `hindsight` 家族
+在页面上叫「记忆」，模型看到的网关描述是 `网关 · 记忆：…`。这既不是包名，也不是
+插件作者写的标题，而是本仓库某一版某个人挑选的词。
+
+现在 `lib/family-labels.js` 里**没有表了**，只有一条派生规则：
+
+```js
+// @vectorize-io/hindsight-coding-agents -> Hindsight Coding Agents
+const PREFIXES = ["dsh-tool-", "dsh-plugin-", "dsh-", "plugin-"];
+const ACRONYMS = new Set(["fs", "mcp", "api", "cli", "ui", "http", "url", "json", "ide"]);
+```
+
+去 `@scope` 前缀 → 去掉一个 `PREFIXES` 里的前缀 → 按 `[-_.\s]+` 切词 → 每词首字母
+大写（缩写词整词大写）。**不再读宿主 locale 的 `title`**：那一层正是「记忆」的来源。
+
+网关名同时回归家族 id。`gatewayName(prefix, familyId, explicit)` 在 `explicit` 为
+`undefined` 时返回 `` `${prefix}${familyId}` ``，现场 `gatewayPrefix: ""`，所以
+`session_query` 就叫 `session_query`，不再缩成 `session`。这一条不是审美问题：
+网关名和家族 id 分家之后，roster、页面、配置键三处各说各的名字，而配置键一直是
+family id——改名反倒让它们重新对齐了。
+
+派生结果（实测 13 行）：
+
+| 家族 id | 0.7.0 | 0.8.0 | 网关 0.7.0 → 0.8.0 |
+| --- | --- | --- | --- |
+| `blender_plugin` | Blender | **Blender Plugin** | `blender` → `blender_plugin` |
+| `computer_use_win` | Computer Use Win | Computer Use Win | 不变 |
+| `free_search` | 搜索 | **Free Search** | `search` → `free_search` |
+| `fs` | 文件读写工具 | **FS** | `fs` → `fs` |
+| `fs_search` | 文件搜索工具 | **FS Search** | `fs_search` → `fs_search` |
+| `github` | GitHub | **Github** | `github` → `github` |
+| `hindsight_coding_agents` | 记忆 | **Hindsight Coding Agents** | `hindsight` → `hindsight_coding_agents` |
+| `image_gen` | 图像 | **Image Gen** | `image` → `image_gen` |
+| `mcp_connector` | MCP 管理 | **MCP Connector** | `mcp` → `mcp_connector` |
+| `schedule` | 日程 | **Schedule** | `schedule` → `schedule` |
+| `session_query` | 会话检索 | **Session Query** | `session` → `session_query` |
+| `tavily` | Tavily | Tavily | 不变 |
+| `video_storyboard` | 视频 | **Video Storyboard** | `video` → `video_storyboard` |
+
+代价说清楚：`GitHub` 变成 `Github`（纯派生认不出品牌），`Blender` 变成
+`Blender Plugin`（包名里就带 `plugin`，派生如实反映）。退出通道是配置覆盖——
+`families.github.label: GitHub` 仍然最高优先，`gateway:` 与 `gatewayPrefix` 同理。
+
+### 网关描述不再截短
+
+`lib/plugin-meta.js` 此前有 `DEFAULT_CAP = 120`，`summarize()` 会**只取第一句**再按
+码点截到 120 并补 `…`。两处都错，而且错在同一个方向上：插件作者写给模型的那段话
+才是模型应该看到的全部内容，本插件没有资格替作者删减。实测 `blender_plugin` 的原文
+是 1251 B / 5 句，被砍成 217 B——砍掉的正好是「怎么用、有什么限制」那几句。
+
+现在 `summarize()` 退化成压平：`String(text ?? "").replace(/\s+/g, " ").trim()`。
+不找句末、不截断、不加省略号。**默认不设上限**；想设的人配
+`maxDescriptionChars`（`0` = 不限，默认 `0`），只有 `> 0` 时才按码点截断并补 `…`。
+上限是**读时**的，改了立刻生效：`readAt()` 的缓存键从 `mtimeMs` 变成
+`{ mtimeMs, ceiling }`，命中还要比 ceiling——否则调大上限会读到旧截断值。
+
+### 装完插件，当场看得见
+
+用户报的现象是「停/启 tavily 之后，家族列表不更新，要再来一遍才出现」。归属链上
+有**三处各管一段、谁也不通知谁的缓存**：
+
+| # | 位置 | 原来 | 现在 |
+| --- | --- | --- | --- |
+| C1 | `lib/tool-scan.js` 扫描计划 | 按 profile 根缓存，注释写「只有安装才变」，但安装不让它失效 | 计划按 `manifestStamp(root)` 失效（`package.json` 的 `mtimeMs:size`，一次 `stat` 0.2 ms） |
+| C2 | `lib/owner.js` `registered()` | 按 `${revision}\u0000${knownKey}` 记忆化，`revision` 只在本进程看到注册/注销时 +1 | 新增 `forget()`：清 `scanned`、弃 memo、`revision += 1`（**不清** `live` / `preexisting`，那两条是进程事实） |
+| C3 | 设置页「刷新清单」 | 只重新 `GET /describe`，宿主侧什么都不重算 | 改走 `POST /api/dsh-tool-gate/describe/refresh`：`forgetScanCache()` → `ownerIndex.forget()` → `refreshFamilies({ force: true })` |
+
+C1 是根因：插件安装**一定**会改写 profile 的 `package.json`（bundle 列表就在里面），
+所以拿它的指纹做失效条件既便宜又准确，日常路径上不需要任何人记得调 `forget()`。
+C2 留给指纹看不见的情况（同长度同秒改写、原地换包），C3 是用户手里的那个按钮。
+
+`/refresh` 的边界：只收 **POST**（`GET` → 405，跨站 `Origin` → 403，仍然过
+`isAllowed`），返回与 `/describe` **同形**的快照，所以页面拿到就能直接替换，不用
+再发一次 GET。它只改「你看得见什么」——当前会话的 wire 是冻结的，新家族从**下一个
+会话**开始折叠，页面上的提示语也这么写。这与「网关被撤回时解冻」不冲突：那是撤回
+一个已经在用的网关，这是新装一个还没进来的。
+
+### 空网关：判空要看「谁能调」，不是「注册表里有没有」
+
+wire 上曾经多出一个 0 成员的 `fs_search` 网关：`dsh-ops` 用 `agent.restrict({deny})`
+把 `read`/`glob`/`grep` 从 agent 作用域里挡掉了，但 `knownNames()` 是**不受限制**的
+超集，仍然认为那几个名字存在；而页面按 `schemas(agent)`（只含 visible）算成员数，
+算出来是 0，于是把行隐藏了。两边不一致的结果是：模型拿到一个 `list` 只能回「没有
+成员」的工具，用户看不见它、也关不掉它。
+
+判定改为 `callableNames(primaryScope)`：各 agent 的 `view(scope).visible` 并集，加上
+正在装配的那个作用域；只有在完全没有作用域时才退化成不带作用域的视野（fake host 与
+老调用点走这条，行为与之前一致）。`knownNames()` 保留，但只用于归属推导。
+
+同一处还有第二个不一致：0 成员家族的 `promptDisclosure` 说 `available: true`，
+`reason: "ready"`——给了一个翻不动也没意义的开关。现在改成 `available: false`、
+`reason: "no-tools"`（页面本来就隐藏这些行，这是 API 层的一致性）。
+
+### 网关被撤回时，解冻
+
+`AgentState.adopt()` 是**粘性**的，这是刻意设计：冻结面变化就等于提示前缀重付，
+所以一冻结就尽量不动。代价是中途消失的网关会一直留在冻结面里，而它收起的成员
+又回不来——用户感觉是「这个家族死了」。
+
+现在 `syncGateways()` 记住上一轮的名字集合，**有名字消失**就清掉所有 agent 的
+`frozen` / `collapsed` / `collapsedNames` / `ready` / `noticeText`，并记一条
+`gateway(s) withdrawn (…) ; re-freezing N agent(s)`。没有名字消失的那一轮不重建，
+所以稳态仍然粘性（`test/e2e.mjs` 场景 17 两头都断言）。
+
+还有一个必须一起做的细节：宿主在跑 `system-prompt/assemble` 之前就收好了 schema
+列表，所以这一轮里被 dispose 的网关**仍在**待过滤的列表上；而冻结面的未知归属策略
+是 `expose`，它会被当成未知工具留下。于是加了 `everWithdrawn` 集合：撤回过的名字
+直接从这一轮的列表里滤掉，重新出现的名字再移出集合。
+
+### 实测（desktop profile，13 个家族 / 12 个启用网关）
+
+| 项 | 0.7.0 | 0.8.0 |
+| --- | ---: | ---: |
+| 12 个网关 description 正文 | 1412 B | **3880 B** |
+| 网关整行（`网关 · label：detail`） | 1673 B | **4180 B** |
+| roster（`本轮收起：` 那一行） | 238 B | **343 B** |
+| 共享参数 schema ×12 | 4800 B | 4800 B |
+| **合计** | **6711 B** | **9323 B（+2612 B ≈ +816 tok/轮）** |
+
+也就是说，这一版是**用前缀换准确**：多付约 0.8k tok/轮，换来名字与插件作者原意一致、
+描述完整。想按下限的人可以配 `maxDescriptionChars: 300`，那样是 2857 + 343 + 4800 =
+**8000 B**，仍然比 0.7.0 多 1289 B，但比不限少 1323 B。
 
 ## 0.7.0 的改动
 
@@ -342,6 +504,9 @@ node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓
 2. 插件清单的 `description`；
 3. `lib/family-labels.js` 的兜底句（只剩这一层是手写的）。
 
+（第 3 层是手写文案，最终也是「记忆」「图像」这类意译词的藏身处——0.8.0 把它和整张标签表
+一起删了，描述现在只有前两层，没有兜底句：说不出来就留空，页面标 `无`。）
+
 **新模块 `lib/plugin-meta.js`** 负责这一切。要点都是被实测逼出来的：
 
 - 每个 Loader entry 的 `baseUrl` 才是解析锚点。拿单一 profile 根去解析，第一方包全部落空。
@@ -351,8 +516,8 @@ node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓
   `parsed.meta.title`，旧版平铺写法被**静默忽略**——本插件自己的两个 locale 文件已一并修正。
 - 按包记 `manifestPath` 与 mtime，文件没改就不重复读；`describe()` 永不抛。
 
-label 的取值链也相应变成：短名表 → 宿主 `meta.title`（仅在它不等于包名时）→ id 驼峰化
-（`computer_use_win` → `Computer Use Win`）。设置页在描述后面标出来源，还在吃兜底的一眼可见。
+（label 的取值链在 0.7.0 是「短名表 → 宿主 `meta.title` → id 驼峰化」；0.8.0 已把前两层都删掉，
+改为纯粹从包名派生，见下文。）
 
 ### 网关使用说明只在系统提示词里说一次
 
@@ -404,7 +569,7 @@ notice 末尾补一行名单 `本轮收起：\`blender\` Blender · \`github\` G
 // families[] 每行新增
 "promptDisclosure": {
   "available": true,                    // 现在打开是否真的会做事
-  "reason": "ready",                    // ready|master-off|requires-collapse|required-only|no-family|unowned|no-prose
+  "reason": "ready",                    // ready|master-off|requires-collapse|required-only|no-family|unowned|no-prose|no-tools
   "chars": 2576,                        // 该家族贡献给提示词的字符数
   "names": ["free-search:engines"],
   "required": false,

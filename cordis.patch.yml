@@ -46,8 +46,11 @@
         # 认不出归属的工具：expose = 留在 wire 上（安全）；collapse = 一并收起（省得多）。
         unknownOwnerPolicy: expose
 
-        # 网关工具名前缀，留空则直接用家族名：blender / mcp / github / …
+        # 网关工具名前缀，留空则直接用家族 id：blender_plugin / mcp_connector / github / …
         gatewayPrefix: ""
+
+        # 网关描述的字数上限（按码点）。0 = 不限，插件自述整段进入描述。
+        maxDescriptionChars: 0
 
         # 检测到 PTC（run_code）呈现模式时的行为：disable = 整体停用（推荐）。
         ptcMode: disable

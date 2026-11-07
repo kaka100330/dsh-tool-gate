@@ -1,6 +1,6 @@
 {
   "name": "dsh-tool-gate",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "渐进披露工具网关：按插件包自动成族，把不常用工具收进按需查询的网关，并可按插件披露提示词",
   "keywords": [
     "builtin-families",

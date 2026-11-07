@@ -128,16 +128,19 @@ function render(node, depth = 0) {
 }
 
 // ——— the host-side pieces the page talks to ————————————————————————
+// Labels are derived from the package name, and the gateway name is the family id
+// (0.8.0) — so `blender_plugin` / `Blender Plugin`, not `blender`. The page renders
+// whatever the bridge sends; it never derives a name of its own.
 const families = [
-  { id: "blender", label: "Blender", description: "3D", builtin: false, enabled: true, count: 15, tokens: 8415,
-    members: ["blender_rt_do", "blender_viewport"], gateway: "blender", packages: ["dsh-blender-plugin"], prefixes: [],
+  { id: "blender_plugin", label: "Blender Plugin", description: "3D", builtin: false, enabled: true, count: 15, tokens: 8415,
+    members: ["blender_rt_do", "blender_viewport"], gateway: "blender_plugin", packages: ["dsh-blender-plugin"], prefixes: [],
     promptDisclosure: { available: false, reason: "no-prose", chars: 0, names: [], required: false, enabled: false, hasText: false } },
-  { id: "free_search", label: "搜索", description: "", builtin: false, enabled: true, count: 9, tokens: 2576,
+  { id: "free_search", label: "Free Search", description: "", builtin: false, enabled: true, count: 9, tokens: 2576,
     members: ["free_search_query"], gateway: "free_search", packages: ["dsh-free-search"], prefixes: [],
     promptDisclosure: { available: true, reason: "ready", chars: 2576, names: ["free-search:engines"], required: false,
       enabled: true, hasText: true } },
-  { id: "session", label: "会话检索", description: "检索历史会话", builtin: true, enabled: true, count: 5, tokens: 1242,
-    members: ["session_search"], gateway: "session", packages: ["@deepseek-ai/dsh-tool-session-query"], prefixes: [],
+  { id: "session_query", label: "Session Query", description: "检索历史会话", builtin: true, enabled: true, count: 5, tokens: 1242,
+    members: ["session_search"], gateway: "session_query", packages: ["@deepseek-ai/dsh-tool-session-query"], prefixes: [],
     promptDisclosure: { available: false, reason: "required-only", chars: 630, names: ["session:help"], required: true,
       enabled: false, hasText: true } },
   // A family whose plugin registers no tool: its gateway is not mounted, so the
@@ -252,7 +255,7 @@ assert.equal(
 );
 
 assert.match(page, /Blender/, "a third-party family is listed");
-assert.match(page, /会话检索/, "a builtin family is listed");
+assert.match(page, /Session Query/, "a builtin family is listed under its derived label");
 assert.match(page, /提示词随 list 披露/, "the prompt sub-switch sits on the family row");
 // The switch belongs to a family row, so the prose it governs is described on
 // that same row rather than in a separate plugin list.

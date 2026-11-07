@@ -42,6 +42,8 @@ function createHost(options = {}) {
   const listeners = new Map(); // event -> [fn]
   const tools = new Map(); // name -> definition
   const scopedTools = new Map(); // agent -> Map<name, definition>
+  /** agent -> Set<name>: names removed from that scope's view by `restrict()`. */
+  const restricted = new Map();
   const guards = [];
   const effects = [];
   const loggerLines = [];
@@ -136,13 +138,47 @@ function createHost(options = {}) {
      * exactly how the schedule bundle registers its four tools.
      */
     schemas(scope) {
-      const visible = new Map(tools);
-      for (const definition of scopedTools.get(scope)?.values() ?? []) visible.set(definition.name, definition);
-      return [...visible.values()].map((definition) => ({
+      return [...this.visibleDefinitions(scope).values()].map((definition) => ({
         name: definition.name,
         description: definition.description,
         parameters: definition.parameters,
       }));
+    },
+    /** The definitions a scope can actually call: global + its own, minus denials. */
+    visibleDefinitions(scope) {
+      const visible = new Map(tools);
+      for (const definition of scopedTools.get(scope)?.values() ?? []) visible.set(definition.name, definition);
+      for (const name of restricted.get(scope) ?? []) visible.delete(name);
+      return visible;
+    },
+    /**
+     * The host's `view(scope)` — the projection the gate judges emptiness by.
+     *
+     * `knownNames` is deliberately the *unrestricted* superset (every global and
+     * every agent-layer name), which is what the real host reports and what made
+     * an empty gateway reach the wire: a name denied to every agent still counted
+     * as a member. `visible` is what can actually be called in `scope`.
+     */
+    view(scope) {
+      const known = new Set(tools.keys());
+      for (const layer of scopedTools.values()) {
+        for (const name of layer.keys()) known.add(name);
+      }
+      return {
+        visible: [...this.visibleDefinitions(scope).keys()],
+        knownNames: known,
+        restrictableNames: new Set(known),
+      };
+    },
+    /** Deny names in one scope, the way `dsh-ops` installs its native replacements. */
+    restrict(scope, names) {
+      const set = restricted.get(scope) ?? new Set();
+      for (const name of names) set.add(name);
+      restricted.set(scope, set);
+      return () => {
+        for (const name of names) set.delete(name);
+        if (set.size === 0) restricted.delete(scope);
+      };
     },
     guard(fn) {
       guards.push(fn);
@@ -557,9 +593,9 @@ const plain = (config) => {
   plugin.apply(host.ctx, config);
 
   // Gateways must exist now (registered eagerly when enabled).
-  assert.ok(host.tools.get("blender"), "blender gateway registered");
+  assert.ok(host.tools.get("blender_plugin"), "blender_plugin gateway registered");
   assert.ok(host.tools.get("github"), "github gateway registered");
-  assert.ok(host.tools.get("image"), "image gateway registered");
+  assert.ok(host.tools.get("image_gen"), "image_gen gateway registered");
   assert.ok(host.tools.get("mcp_servers"), "mcp_servers gateway registered");
 
   const agent = { id: "s2", session: { log: [] } };
@@ -571,7 +607,7 @@ const plain = (config) => {
   assert.ok(names.includes("workflow"), "core tool stays");
   assert.ok(names.includes("ops_bash"), "ops tool stays");
   assert.ok(names.includes("compress"), "context tool stays");
-  assert.ok(names.includes("blender"), "gateway is on the wire");
+  assert.ok(names.includes("blender_plugin"), "gateway is on the wire");
   assert.ok(!names.includes("blender_rt_do"), "blender member collapsed");
   assert.ok(!names.includes("gh_repo"), "github member collapsed");
   assert.ok(!names.includes("generate_image"), "image member collapsed");
@@ -580,18 +616,18 @@ const plain = (config) => {
   // The notice is appended once, and stays byte-identical after.
   const notice = first.sections.find((section) => section.name === "tool-gate: progressive-disclosure");
   assert.ok(notice !== undefined, "notice section added");
-  assert.match(notice.text, /`blender`/, "notice lists the blender gateway");
+  assert.match(notice.text, /`blender_plugin`/, "notice lists the blender_plugin gateway");
   assert.match(notice.text, /`github`/, "notice lists the github gateway");
   // The roster carries the label beside the name. The name is what the model
   // matches against the tool list; the label is what says the gateway is for.
-  assert.match(notice.text, /`blender` Blender/, "the roster pairs each gateway with its label");
-  assert.match(notice.text, /`github` GitHub/);
+  assert.match(notice.text, /`blender_plugin` Blender Plugin/, "the roster pairs each gateway with its label");
+  assert.match(notice.text, /`github` Github/, "the label is the package name, capitalised");
   // The usage contract is stated once, here, instead of on every gateway.
   assert.match(notice.text, /action: "list"/, "the notice explains list");
   assert.match(notice.text, /action: "call"/, "and call");
   // And it is not stated again anywhere else: no gateway's own description
   // repeats the shared boilerplate.
-  for (const gatewayName of ["blender", "github", "image", "mcp_servers"]) {
+  for (const gatewayName of ["blender_plugin", "github", "image_gen", "mcp_servers"]) {
     const definition = host.tools.get(gatewayName);
     assert.equal(
       definition.description.includes("这个家族的成员工具不在本轮工具列表里"),
@@ -663,7 +699,7 @@ const plain = (config) => {
   // Through the gateway: the member runs, and the sub-call id marks it as vetted.
   const viaGateway = await host.ctx.tools.execute({
     callId: "c3",
-    name: "blender",
+    name: "blender_plugin",
     arguments: { action: "call", tool: "blender_rt_do", arguments: { n: 1 } },
     agent,
   });
@@ -705,7 +741,7 @@ const plain = (config) => {
 
   const result = await host.ctx.tools.execute({
     callId: "c9",
-    name: "hindsight",
+    name: "hindsight_coding_agents",
     arguments: { action: "call", tool: "hindsight_reflect", arguments: {} },
     agent,
   });
@@ -771,7 +807,7 @@ const plain = (config) => {
   const off = await host.assemble(agent);
   assert.ok(off.tools.map((t) => t.name).includes("blender_rt_do"), "turning it off restores the tool");
   assert.equal(off.sections.some((s) => s.name === "tool-gate: progressive-disclosure"), false, "notice withdrawn");
-  assert.equal(host.tools.get("blender"), undefined, "gateway unregistered when disabled");
+  assert.equal(host.tools.get("blender_plugin"), undefined, "gateway unregistered when disabled");
   console.log("OK live toggle");
 }
 
@@ -790,12 +826,12 @@ const plain = (config) => {
   const names = on.tools.map((t) => t.name);
   assert.ok(!names.includes("session_search"), "session_search collapses into its family");
   assert.ok(!names.includes("schedule_create"), "schedule_create collapses into its family");
-  assert.ok(names.includes("session"), "the session gateway is on the wire");
+  assert.ok(names.includes("session_query"), "the session gateway is on the wire");
   assert.ok(names.includes("schedule"), "the schedule gateway is on the wire");
   assert.ok(names.includes("workflow"), "an unlisted core tool still stays");
 
   // Listing the builtin family returns its members like any other.
-  const listed = await host.ctx.tools.execute({ callId: "b1", name: "session", arguments: { action: "list" }, agent });
+  const listed = await host.ctx.tools.execute({ callId: "b1", name: "session_query", arguments: { action: "list" }, agent });
   assert.equal(listed.isError, false);
   const payload = JSON.parse(listed.content[0].text);
   assert.deepEqual(payload.members.map((m) => m.name), ["session_search", "session_trace"]);
@@ -816,7 +852,7 @@ const plain = (config) => {
   const names = on.tools.map((t) => t.name);
   assert.ok(names.includes("session_search"), "builtinFamilies:false keeps session tools on the wire");
   assert.ok(!names.includes("blender_rt_do"), "third-party families still collapse");
-  assert.equal(host.tools.get("session"), undefined, "the session gateway is not registered");
+  assert.equal(host.tools.get("session_query"), undefined, "the session gateway is not registered");
 
   // Flipping the group switch live restores the gateway and re-collapses.
   const write = (field, value) => {
@@ -827,7 +863,7 @@ const plain = (config) => {
   write("builtinFamilies", true);
   const after = await host.assemble(agent);
   assert.ok(!after.tools.map((t) => t.name).includes("session_search"), "turning the group on collapses again");
-  assert.ok(host.tools.get("session") !== undefined, "the gateway came back");
+  assert.ok(host.tools.get("session_query") !== undefined, "the gateway came back");
   console.log("OK builtin group switch");
 }
 
@@ -976,14 +1012,14 @@ const plain = (config) => {
   host.agents.push(agent);
   await host.assemble(agent);
 
-  const listed = await host.ctx.tools.execute({ callId: "l1", name: "image", arguments: { action: "list" }, agent });
+  const listed = await host.ctx.tools.execute({ callId: "l1", name: "image_gen", arguments: { action: "list" }, agent });
   assert.equal(listed.isError, false);
   assert.equal(listed.content.length, 2, "list returns the members plus one prose block");
-  assert.match(listed.content[1].text, /「图像」家族的使用说明/, "the prose block is labelled as family guidance");
+  assert.match(listed.content[1].text, /「Image Gen」家族的使用说明/, "the prose block is labelled as family guidance");
   assert.match(listed.content[1].text, /provider: openai-compat/, "the plugin's own text is returned verbatim");
 
   // A second list does not repeat the prose: it is already in the history.
-  const again = await host.ctx.tools.execute({ callId: "l2", name: "image", arguments: { action: "list" }, agent });
+  const again = await host.ctx.tools.execute({ callId: "l2", name: "image_gen", arguments: { action: "list" }, agent });
   assert.equal(again.content.length, 1, "a repeat list does not repeat the prose");
   assert.match(again.content[0].text, /已在本会话中返回过/, "a repeat list is the one-line reminder");
   console.log("OK list discloses the withheld prose exactly once");
@@ -1038,10 +1074,10 @@ const plain = (config) => {
   assert.ok(value.families.length >= 3, "every derived family is listed");
   assert.deepEqual(
     value.families.map((family) => family.gateway).sort(),
-    ["blender", "github", "session"],
-    "the gateway names come from the label hints",
+    ["blender_plugin", "github", "session_query"],
+    "the gateway name is the family id, never a shortened label hint",
   );
-  const session = value.families.find((family) => family.gateway === "session");
+  const session = value.families.find((family) => family.gateway === "session_query");
   assert.ok(session.count >= 1, "the session family reports its live member count");
   assert.ok(session.tokens > 0, "and a token weight");
   assert.equal(session.builtin, true, "a first-party package is marked builtin");
@@ -1064,7 +1100,7 @@ const plain = (config) => {
     assert.equal(typeof prompt.chars, "number", `${family.id}: chars is a number`);
     assert.ok(Array.isArray(prompt.names), `${family.id}: names is an array`);
     assert.ok(
-      ["ready", "master-off", "requires-collapse", "required-only", "no-family", "unowned", "no-prose"]
+      ["ready", "master-off", "requires-collapse", "required-only", "no-family", "unowned", "no-prose", "no-tools"]
         .includes(prompt.reason),
       `unknown prompt reason on ${family.id}: ${prompt.reason}`,
     );
@@ -1073,6 +1109,13 @@ const plain = (config) => {
     // `enabled` is the switch's position, not its usability — a family that was
     // switched on and then expanded must still report on.
     assert.equal(typeof prompt.enabled, "boolean", `${family.id}: enabled is a boolean`);
+    // A family with no members has no gateway, so nothing could carry its prose
+    // back on `list`. Offering the switch would be an API-level lie the page only
+    // hides by filtering empty rows.
+    if (family.count === 0) {
+      assert.equal(prompt.available, false, `${family.id}: an empty family offers no switch`);
+      assert.equal(prompt.reason, "no-tools", `${family.id}: and says why`);
+    }
   }
   // `dsh-free-search` injects a section here but registers no tool, so it has no
   // family and no gateway could carry its prose. That is exactly the case the
@@ -1121,15 +1164,22 @@ const plain = (config) => {
     "number",
     "the count of omitted first-party packages is reported",
   );
-  // Every collapsed family must be describable, or its gateway says nothing about
-  // what is behind it. In this fake host there is no `pluginPackages` service, so
-  // the fallback table is what answers — which is the point: the contract is
-  // "non-empty", not "non-empty only when the host helps".
+  // A description is only ever the plugin's own. This fake host has no
+  // `pluginPackages` service, so every family reports `""` from `none` — and that
+  // is the contract now: the page shows what the package says about itself, and
+  // invents nothing when it says nothing. (The old table used to answer here,
+  // which is how `Hindsight` came out as the capability word `记忆`.)
+  const described = value.families.filter((family) => (family.description ?? "") !== "");
+  assert.equal(described.length, 0, "no family invents a description the host did not supply");
   for (const family of value.families) {
     if (family.hidden === true) continue;
-    assert.notEqual(family.description, "", `${family.id} has a description`);
+    assert.equal(
+      family.descriptionSource,
+      family.description === "" ? "none" : family.descriptionSource,
+      `${family.id}: an empty description is sourced as none`,
+    );
     assert.ok(
-      ["metaOf", "manifest", "hint", "derived", "override"].includes(family.descriptionSource),
+      ["metaOf", "manifest", "derived", "override", "none"].includes(family.descriptionSource),
       `unknown description source on ${family.id}: ${family.descriptionSource}`,
     );
   }
@@ -1150,7 +1200,66 @@ const plain = (config) => {
     { writeHead: (code) => { deniedStatus = code; }, end: () => {} },
   );
   assert.equal(deniedStatus, 403, "a cross-site request is refused");
-  console.log("OK settings bridge describe");
+
+  // ——— POST /describe/refresh: the cache-busting read ————————————————
+  // A plugin installed by another process moves none of the three caches the
+  // host keeps, so re-issuing the GET (what the old button did) answered from
+  // before the install. The refresh route drops them and re-derives.
+  assert.ok(routes.has("/api/dsh-tool-gate/describe/refresh"), "the refresh route is registered");
+  const refresh = routes.get("/api/dsh-tool-gate/describe/refresh");
+  const call = async (method, headers = request.headers) => {
+    let code;
+    let payload;
+    await refresh.handler(
+      { ...request, method, headers },
+      { writeHead: (value) => { code = value; }, end: (text) => { payload = JSON.parse(text); } },
+    );
+    return { code, payload };
+  };
+
+  // A side-effecting read must not be reachable as a GET.
+  const asGet = await call("GET");
+  assert.equal(asGet.code, 405, "the refresh route is POST-only");
+  const crossSite = await call("POST", { ...request.headers, origin: "http://evil.example" });
+  assert.equal(crossSite.code, 403, "a cross-site refresh is refused");
+
+  const before = value.families.map((family) => family.id).sort();
+  const refreshed = await call("POST");
+  assert.equal(refreshed.code, 200, "the refresh succeeds");
+  assert.equal(refreshed.payload.ok, true);
+  assert.equal(refreshed.payload.value.schemaVersion, 2, "and answers with the /describe shape");
+  assert.deepEqual(
+    refreshed.payload.value.families.map((family) => family.id).sort(),
+    before,
+    "nothing was installed in between, so the inventory is unchanged",
+  );
+
+  // Now install one, exactly as the user does: a package appears in the profile
+  // *after* this process derived its table.
+  await addTool(host, "acme_gadget_a", "dsh-acme-gadgets");
+  await addTool(host, "acme_gadget_b", "dsh-acme-gadgets");
+  const stale = await call("POST", request.headers); // same process, caches already dropped
+  assert.equal(stale.code, 200);
+  const after = await call("POST");
+  assert.equal(after.code, 200);
+  assert.ok(
+    after.payload.value.families.some((family) => family.id === "acme_gadgets"),
+    "the newly installed plugin appears in the inventory without a restart",
+  );
+  assert.equal(
+    stale.payload.value.families.some((family) => family.id === "acme_gadgets"),
+    true,
+    "the first refresh already saw it: the scan index is fingerprinted on the profile manifest",
+  );
+  for (const family of after.payload.value.families) {
+    assert.equal(family.hidden, family.count === 0, `hidden still mirrors membership (${family.id})`);
+    assert.equal(
+      family.promptDisclosure.available,
+      family.promptDisclosure.reason === "ready",
+      `available still follows reason (${family.id})`,
+    );
+  }
+  console.log("OK settings bridge describe + refresh");
 }
 
 // ————————————————————————————————————————————————————————————————
@@ -1339,6 +1448,164 @@ const plain = (config) => {
     "and registers no gateway for them",
   );
   console.log("OK an unknown plugin becomes its own family");
+}
+
+// ————————————————————————————————————————————————————————————————
+// 16. No gateway for a family whose members are all restricted away
+// ————————————————————————————————————————————————————————————————
+// The `fs_search` bug: a package whose tools exist in the registry but are denied
+// to every agent (`dsh-ops` denies `read`/`glob`/`grep` exactly this way).
+// Emptiness used to be judged against the scope-less `knownNames()` superset, so a
+// gateway reached the wire with zero members: the model saw a tool whose `list`
+// could only answer "no members", while the page — which counts through
+// `schemas(agent)` — correctly hid the row.
+{
+  const host = createHost();
+  await addTool(host, "workflow");
+  await addTool(host, "fs_read", "dsh-fs-search");
+  const agent = { id: "s16", session: { log: [] } };
+  host.agents.push(agent);
+  plugin.apply(host.ctx, Config({ enabled: true }));
+
+  // Before the restriction the family is real, and its gateway is mounted.
+  const before = await host.assemble(agent);
+  assert.ok(host.tools.get("fs_search") !== undefined, "a populated family gets its gateway");
+  assert.ok(!before.tools.some((tool) => tool.name === "fs_read"), "and its member is collapsed");
+
+  // Now deny the member in this agent's scope. It still exists in the registry
+  // (and in `knownNames`), so only a scope-aware read notices it is uncallable.
+  host.tools.restrict(agent, ["fs_read"]);
+  const after = await host.assemble(agent);
+  assert.equal(
+    host.tools.get("fs_search"),
+    undefined,
+    "a family nobody can call must not carry a gateway",
+  );
+  assert.ok(
+    !after.tools.some((tool) => tool.name === "fs_search"),
+    "and the withdrawn gateway leaves the wire in the same pass",
+  );
+
+  // The settings page must agree: the row is hidden because it has no members.
+  const bridge = createHost({
+    webServer: {
+      register(route) {
+        this.routes ??= new Map();
+        this.routes.set(route.path, route);
+        return () => this.routes.delete(route.path);
+      },
+    },
+  });
+  await addTool(bridge, "workflow");
+  await addTool(bridge, "fs_read", "dsh-fs-search");
+  const bridgeAgent = { id: "s16b", session: { log: [] } };
+  bridge.agents.push(bridgeAgent);
+  plugin.apply(bridge.ctx, Config({ enabled: true }));
+  bridge.tools.restrict(bridgeAgent, ["fs_read"]);
+  await bridge.assemble(bridgeAgent);
+  let payload;
+  await bridge.ctx.get("webServer", false).routes.get("/api/dsh-tool-gate/describe").handler(
+    {
+      method: "GET",
+      headers: { host: "127.0.0.1:52993" },
+      socket: { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" },
+    },
+    { writeHead: () => {}, end: (body) => { payload = JSON.parse(body); } },
+  );
+  const row = payload.value.families.find((family) => family.id === "fs_search");
+  assert.ok(row !== undefined, "the family is still listed, so its config stays reachable");
+  assert.equal(row.hidden, true, "but the page hides it");
+  assert.equal(row.count, 0);
+  assert.equal(row.promptDisclosure.available, false, "and offers no switch that cannot work");
+  assert.equal(row.promptDisclosure.reason, "no-tools");
+  console.log("OK an uncallable family gets no gateway");
+}
+
+// ————————————————————————————————————————————————————————————————
+// 17. A gateway withdrawn mid-session leaves the wire, and the freeze thaws
+// ————————————————————————————————————————————————————————————————
+// Two separate things break when a family stops having a gateway after the freeze:
+//  - the frozen surface is sticky on purpose (that is what keeps the wire prefix
+//    stable), so the gateway would otherwise sit on the wire for the rest of the
+//    session — a tool whose \`list\` can only answer "no members";
+//  - the collapsed set was decided while that gateway existed, so the members it
+//    hid would stay collapsed with nothing left to reach them through.
+// Withdrawal therefore drops the gateway from the assembled list *and* clears the
+// freeze, so that same pass re-derives. Nothing else clears it.
+{
+  const host = createHost();
+  for (const name of ["workflow", "session_search", "blender_rt_do"]) await addTool(host, name);
+  const live = Config({ enabled: true });
+  plugin.apply(host.ctx, live);
+  const agent = { id: "s17", session: { log: [] } };
+  host.agents.push(agent);
+
+  const frozen = await host.assemble(agent);
+  assert.ok(frozen.tools.some((tool) => tool.name === "session_query"), "the gateway is frozen in");
+  assert.ok(!frozen.tools.some((tool) => tool.name === "session_search"), "and its member is collapsed");
+
+  // Turn the builtin group off, which removes the family (and with it the gateway)
+  // while the members stay registered. Note the freeze switch is *not* touched.
+  const write = (field, value) => {
+    const ref = live[field];
+    ref[Object.getOwnPropertySymbols(ref).find((s) => String(s).includes("volatile.write"))](value);
+  };
+  write("builtinFamilies", false);
+  const after = await host.assemble(agent);
+  assert.ok(
+    !after.tools.some((tool) => tool.name === "session_query"),
+    "the withdrawn gateway leaves the frozen surface in the same pass",
+  );
+  assert.equal(host.tools.get("session_query"), undefined, "and is unmounted");
+  assert.ok(
+    after.tools.some((tool) => tool.name === "session_search"),
+    "and the members it was hiding come back — otherwise the family would be unreachable",
+  );
+  const direct = await host.ctx.tools.execute({ callId: "c17", name: "session_search", arguments: {}, agent });
+  assert.equal(direct.isError, false, "and they are callable again, not refused as collapsed");
+
+  // Turning the group back on restores the family in full: the gateway returns and
+  // its members collapse under it again. No residue from the withdrawal, because
+  // the freeze was cleared rather than patched.
+  // Turning the group back on mounts the gateway again. The *frozen* agent does
+  // not pick it up — the surface is sticky, exactly like a plugin installed
+  // mid-session — but a new session derives from the current registry and gets it
+  // in full. That is the documented behaviour, so it is asserted rather than
+  // assumed.
+  write("builtinFamilies", true);
+  const sameAgent = await host.assemble(agent);
+  assert.ok(host.tools.get("session_query") !== undefined, "the gateway is mounted again");
+  assert.ok(
+    sameAgent.tools.some((tool) => tool.name === "session_search"),
+    "the frozen agent keeps the member on its wire until a new session",
+  );
+  const fresh = { id: "s17b", session: { log: [] } };
+  host.agents.push(fresh);
+  const restored = await host.assemble(fresh);
+  assert.ok(
+    restored.tools.some((tool) => tool.name === "session_query"),
+    "a new session collapses the restored family again",
+  );
+  assert.ok(!restored.tools.some((tool) => tool.name === "session_search"), "its members going back under it");
+  const viaGateway = await host.ctx.tools.execute({
+    callId: "c17b",
+    name: "session_query",
+    arguments: { action: "list" },
+    agent: fresh,
+  });
+  assert.equal(viaGateway.isError, false, "and the gateway can list its members");
+  assert.match(viaGateway.content[0].text, /session_search/);
+
+  // Steady state stays sticky: assemblies with no withdrawal must not rebuild.
+  const quiet = host.loggerLines.filter((entry) => entry.includes("re-freezing")).length;
+  await host.assemble(agent);
+  await host.assemble(fresh);
+  assert.equal(
+    host.loggerLines.filter((entry) => entry.includes("re-freezing")).length,
+    quiet,
+    "an unchanged inventory never re-freezes",
+  );
+  console.log("OK a withdrawn gateway leaves the frozen surface");
 }
 
 console.log("\nALL END-TO-END CHECKS PASSED");
