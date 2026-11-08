@@ -202,8 +202,17 @@ function createHost() {
     return agent;
   };
 
-  /** Assemble exactly like 0.2.2: no `tools` in the payload, host re-attaches its own. */
+  /**
+   * Assemble exactly like 0.2.2.
+   *
+   * Order matters and is the whole point of the deferral the plugin does: the
+   * provider is asked for the tool list *before* the waterfall runs, and the host
+   * re-attaches that already-collected list afterwards. A gateway registered during
+   * the waterfall is therefore absent from the payload it is deciding about, which
+   * is why collapsing its members on the same pass would strand the family.
+   */
   const assemble = async (agent) => {
+    const collected = wire(agent).map((name) => ({ name })); // provider runs first
     const base = { sections: [{ name: "identity", text: "you are a harness" }], contexts: [], variables: {} };
     const list = [...(listeners.get("system-prompt/assemble") ?? [])];
     let index = -1;
@@ -214,8 +223,7 @@ function createHost() {
       return fn(base, { scope: agent }, next);
     };
     const transformed = await next();
-    // The host re-attaches the provider's list no matter what the listener returned.
-    return { ...transformed, tools: wire(agent).map((name) => ({ name })) };
+    return { ...transformed, tools: collected };
   };
 
   return { ctx, toolsService, assemble, wire, makeAgent, loggerLines, definitions };
@@ -298,20 +306,35 @@ const agent = host.makeAgent("s1");
 }
 
 // 2. The plugin must recognise the family and register its gateway.
-await host.assemble(agent);
+const first = await host.assemble(agent);
 assert.equal(host.definitions.has("demo_plugin"), true, "gateway registered on the 0.2.2 contract");
 
-// 3. The provider's list must lose the members and keep the gateway.
-const wireBefore = host.wire(agent);
-assert.equal(wireBefore.includes("demo_one"), false, "collapsed member is not on the wire");
-assert.equal(wireBefore.includes("demo_plugin"), true, "its gateway is on the wire");
-assert.equal(wireBefore.includes("resident_tool"), true, "unowned tools stay");
+// 3. The first payload still carries the members, and that is correct: the
+//    provider ran before this waterfall, so the gateway mounted during it is not
+//    in the payload the listener is looking at. Nothing was removed from a
+//    payload that has no way to reach those tools.
+{
+  const names = first.tools.map((tool) => tool.name);
+  assert.equal(names.includes("demo_one"), true, "first payload leaves members visible");
+  assert.equal(names.includes("demo_plugin"), false, "its gateway is not in that payload");
+}
 
-// 4. The registry still sees every member, which is what `list` reads.
+// 4. From the next assembly on, the members are gone and the gateway is there.
+//    The filter applies at collection time, which is one pass later — exactly the
+//    pass in which the gateway exists.
+const second = await host.assemble(agent);
+{
+  const names = second.tools.map((tool) => tool.name);
+  assert.equal(names.includes("demo_one"), false, "collapsed member is not in the payload");
+  assert.equal(names.includes("demo_plugin"), true, "its gateway is");
+  assert.equal(names.includes("resident_tool"), true, "unowned tools stay");
+}
+
+// 5. The registry still sees every member, which is what `list` reads.
 const schemas = host.toolsService.schemas(agent).map((schema) => schema.name);
 assert.equal(schemas.includes("demo_one"), true, "members stay callable in the registry");
 
-// 5. `action: "list"` returns the member definitions.
+// 6. `action: "list"` returns the member definitions.
 {
   const exec = { callId: "c1", agent, signal: undefined, deferContext() {}, concludeTurn() {} };
   const list = await host.definitions.get("demo_plugin").execute({ action: "list" }, exec);
@@ -320,7 +343,7 @@ assert.equal(schemas.includes("demo_one"), true, "members stay callable in the r
   assert.match(text, /parameters/, "listDetail includes parameters");
 }
 
-// 6. `action: "call"` dispatches through the 0.2.2 batch shape.
+// 7. `action: "call"` dispatches through the 0.2.2 batch shape.
 {
   const exec = { callId: "c2", rootCallId: "c2", agent, signal: undefined, deferContext() {}, concludeTurn() {} };
   const call = await host.definitions.get("demo_plugin").execute(
@@ -331,14 +354,14 @@ assert.equal(schemas.includes("demo_one"), true, "members stay callable in the r
   assert.match(text, /demo_one ran/, "member executed through the gateway");
 }
 
-// 7. Freezing: a second assembly must not move the wire bytes.
+// 8. Freezing: a further assembly must not move the wire bytes.
 {
   const first = host.wire(agent).join(",");
   await host.assemble(agent);
   assert.equal(host.wire(agent).join(","), first, "wire is byte-stable across assemblies");
 }
 
-// 8. Disabling must give the tools back.
+// 9. Disabling must give the tools back.
 {
   config.enabled = false;
   await host.assemble(agent);
