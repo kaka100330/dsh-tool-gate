@@ -513,11 +513,20 @@ async function fixtureModule(pkg, toolName) {
   return module;
 }
 
-/** The definition shape every fake tool uses. */
+/**
+ * The definition shape every fake tool uses.
+ *
+ * The description carries real weight on purpose. `lib/degenerate.js` refuses a
+ * family whose members cannot pay for their gateway, and a three-word stub schema
+ * cannot — so stubs would test the suppression path instead of the collapsing path.
+ * A real schema is a few hundred tokens; this is.
+ */
+const FIXTURE_PADDING = "It accepts arguments and returns text content. ".repeat(28);
+
 function definitionOf(name) {
   return {
     name,
-    description: `${name} does things`,
+    description: `${name} does things. ${FIXTURE_PADDING}`,
     parameters: { type: "object", additionalProperties: true },
     output: { schema: { type: "json" }, render: (_args, value) => value?.content ?? [] },
     async execute(args) {
@@ -725,7 +734,10 @@ const plain = (config) => {
   const host = createHost();
   host.tools.register({
     name: "hindsight_reflect",
-    description: "reflect",
+    // Realistic weight: a one-word stub cannot pay for its family's gateway, so the
+    // degenerate rule (correctly) leaves it on the wire and this suite would test
+    // the suppression path instead of the turn semantics it is about.
+    description: `reflect. ${FIXTURE_PADDING}`,
     parameters: { type: "object", additionalProperties: true },
     output: { schema: { type: "json" }, render: (_a, value) => value.content },
     async execute(_args, exec) {
@@ -1128,18 +1140,38 @@ const plain = (config) => {
   assert.ok(freeSearch.names.includes("free-search:engines"), "and the section names");
   assert.equal(freeSearch.enabled, null, "with no switch to flip");
 
-  // Schema v2: no second list, and the packages that have no family are reported
-  // read-only so their prompt weight stays visible.
-  assert.equal(value.schemaVersion, 2, "the payload is the documented v2 shape");
+  // Schema v3: the four identifiers are separate, `ungrouped` says why from
+  // evidence, and the snapshot carries its own self-check.
+  assert.equal(value.schemaVersion, 3, "the payload is the documented v3 shape");
+  assert.ok(Array.isArray(value.diagnostics), "the snapshot carries its self-check (D1–D8)");
+  assert.equal(
+    value.diagnostics.filter((row) => row.severity === "error").length,
+    0,
+    `no error-level diagnostic on a healthy snapshot: ${JSON.stringify(value.diagnostics.filter((row) => row.severity === "error"))}`,
+  );
   assert.equal(value.plugins, undefined, "the separate plugin list is gone");
   assert.equal(value.promptPlugins, undefined, "and so is its config dict");
   assert.ok(Array.isArray(value.ungrouped), "ungrouped packages are reported, not silently dropped");
   for (const ungrouped of value.ungrouped) {
     assert.equal(typeof ungrouped.package, "string", "an ungrouped row names a package");
     assert.ok(
-      ["resident", "no-tools", "unowned"].includes(ungrouped.reason),
+      ["claimed", "no-collapsible-members", "no-tools", "unowned", "misattributed"].includes(ungrouped.reason),
       `unknown ungrouped reason: ${ungrouped.reason}`,
     );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(ungrouped, "resident"),
+      false,
+      "the old catch-all 'resident' reason is gone: it described packages that were behind a gateway",
+    );
+    // Every reason except `no-tools` is checked against the tools themselves, so a
+    // row can state a fact instead of an assumption (D3 does the same check).
+    if (ungrouped.reason === "no-collapsible-members") {
+      assert.equal(
+        ungrouped.residentCount,
+        ungrouped.toolCount,
+        `${ungrouped.package}: "no-collapsible-members" means every tool is resident`,
+      );
+    }
     assert.equal(ungrouped.enabled, null, `${ungrouped.package} offers no switch`);
     // The host filters first-party packages out of this list: they are never sent
     // to the wire from here and no switch governs them, so listing them only
@@ -1172,6 +1204,18 @@ const plain = (config) => {
   const described = value.families.filter((family) => (family.description ?? "") !== "");
   assert.equal(described.length, 0, "no family invents a description the host did not supply");
   for (const family of value.families) {
+    // The four identifiers, kept apart: `id` for diagnostics, `wire` for the model,
+    // `label` for the user, `configKey` for the config. They used to be one string,
+    // which is how a gateway became `subagent2`.
+    assert.equal(typeof family.wire, "string", `${family.id}: a family carries its wire name`);
+    assert.equal(family.configKey, family.id, `${family.id}: the config key is the family id`);
+    assert.ok(Array.isArray(family.aliases), `${family.id}: aliases are listed`);
+    assert.equal(
+      /[0-9]/.test(family.wire),
+      false,
+      `${family.id}: a wire name never carries a disambiguation digit (${family.wire})`,
+    );
+    assert.equal(typeof family.collapsed, "boolean", `${family.id}: the page can tell whether it is collapsed`);
     if (family.hidden === true) continue;
     assert.equal(
       family.descriptionSource,
@@ -1227,7 +1271,7 @@ const plain = (config) => {
   const refreshed = await call("POST");
   assert.equal(refreshed.code, 200, "the refresh succeeds");
   assert.equal(refreshed.payload.ok, true);
-  assert.equal(refreshed.payload.value.schemaVersion, 2, "and answers with the /describe shape");
+  assert.equal(refreshed.payload.value.schemaVersion, 3, "and answers with the /describe shape");
   assert.deepEqual(
     refreshed.payload.value.families.map((family) => family.id).sort(),
     before,

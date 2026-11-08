@@ -284,9 +284,20 @@ const fixture = await import(pathToFileURL(path.join(PKG_DIR, "index.js")).href)
  * real factory would only add a parameter-schema compilation step that no
  * assertion here depends on.
  */
+/**
+ * A description with realistic weight.
+ *
+ * The degenerate rule (`lib/degenerate.js`) prices a family against the gateway it
+ * needs, so a three-word stub schema is refused a gateway — correctly, and uselessly
+ * for this suite, which is about the *contract*, not about whether a family earns
+ * its keep. A real tool schema is a few hundred tokens; this makes the fakes that
+ * size so the contract assertions still see a collapsed family.
+ */
+const PADDING = "It accepts arguments and returns text content. ".repeat(28);
+
 const make = (name) => ({
   name,
-  description: `${name} demo tool`,
+  description: `${name} demo tool. ${PADDING}`,
   parameters: { type: "object", additionalProperties: true },
   output: { schema: { type: "json" }, render: (_args, value) => value?.content ?? [] },
   async execute() {

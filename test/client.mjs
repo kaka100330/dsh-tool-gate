@@ -154,7 +154,8 @@ const families = [
 // filters first-party packages out of this list — they never reach the wire from
 // here and no switch governs them.
 const ungrouped = [
-  { package: "dsh-free-search", thirdParty: true, reason: "resident", toolCount: 3, chars: 1056,
+  { package: "dsh-free-search", thirdParty: true, reason: "no-collapsible-members", toolCount: 3,
+    residentCount: 3, tools: ["free_search", "free_fetch", "free_multi"], chars: 1056,
     names: ["free-search:engines"], enabled: null },
   { package: "dsh-context", thirdParty: true, reason: "no-tools", toolCount: 0,
     chars: 2608, names: ["context:ui"], enabled: null },
@@ -267,9 +268,9 @@ assert.match(page, /内置/, "a first-party family is labelled");
 // Packages with no family stay visible, read-only: the user must be able to see
 // that they inject text without a switch being offered that does nothing.
 assert.match(page, /未参与折叠/, "ungrouped packages get their own read-only section");
-assert.match(page, /dsh-free-search/, "a resident package is listed");
+assert.match(page, /dsh-free-search/, "a package whose tools are all resident is listed");
 assert.match(page, /dsh-context/, "a prompt-only package is listed");
-assert.match(page, /工具全部常驻/, "and says why it has no switch");
+assert.match(page, /工具全部常驻/, "and says why it has no switch (the reason is a fact, not a default)");
 assert.match(page, /只读/, "and is marked read-only");
 // First-party packages are filtered out by the host, so the count is the only
 // trace they leave — without it the section reads as a complete inventory.

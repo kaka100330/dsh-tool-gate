@@ -52,6 +52,14 @@
         # 网关描述的字数上限（按码点）。0 = 不限，插件自述整段进入描述。
         maxDescriptionChars: 0
 
+        # 建族门槛 k：可折叠成员省下的 token 必须超过 k × 网关自身成本（schema + 描述 + 60），
+        # 才为这个家族建网关。省不回来的家族不建族，成员全部常驻，设置页写明原因。
+        degenerateThreshold: 3
+
+        # 归属校验：拿已安装包源码里的名字声明反证归属。落在引擎包上的归属会被改判给
+        # 真正声明它的包，改不了就降级为「未知」（结果：留在 wire 上，宁可多花 token）。
+        verifyAttribution: true
+
         # 检测到 PTC（run_code）呈现模式时的行为：disable = 整体停用（推荐）。
         ptcMode: disable
 
@@ -73,6 +81,9 @@
         #   packages: [pkg, ...]  把几个包合并成一个家族（被合并的自动家族会消失）
         #   tools: [name, ...]    显式点名成员，用于从一个包里只挑几个工具
         #   prefixes: ["mcp__"]   按工具名前缀归族
+        #   force: true           省不回网关成本也建族（例如只想统一入口）
+        #   aliases: [旧键名]     让老配置键继续生效；找不到任何家族/包/别名的键会报
+        #                         unknown-family-key，而不是静默失效
         #
         # 例：
         #   families:

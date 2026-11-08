@@ -22,8 +22,12 @@ DSH 把当前可见的工具定义随每个请求发给模型。工具越多，�
 | **Schedule**（内置） | 4 | 1,868 |
 | **收起合计** | **93** | **≈25,523** |
 
-常驻的是 36 个核心工具（约 7.5k）、7 个 OPS 工具（约 2.5k）、5 个上下文工具（约 1.2k）
-和 10 个网关（约 1.6k）。**代价约 1.6k tok，换回约 25k tok。**
+常驻的是 36 个核心工具（约 7.5k）、18 个 OPS 工具（约 7.1k）、5 个上下文工具（约 1.2k）
+和网关本身（每个约 0.2k）。**代价约 1.6k tok，换回约 25k tok。**
+
+> 这张表是 0.3.1 的原始测量，保留原样。0.9.0 之前「7 个 OPS 常驻」是错的：手写的保留表只列了
+> 18 个 `ops_*` 里的 7 个，另外 11 个被折叠进了一个叫「Agent Loop」的家族。现在常驻判据由
+> 归属加前缀推导，18 个全在 wire 上（见 [0.9.0 的改动](#090-的改动)）。
 
 内置家族（会话检索、日程）可以在设置页用「内置工具家族」总开关一次关掉，
 也可以逐家族关掉；关掉就是回到「工具常驻 wire、网关不存在」的老样子。
@@ -119,7 +123,9 @@ blender_plugin  { action: "call", tool: "blender_rt_do",
   所以将来某个插件开始注入提示词时，**不需要改本插件**就会出现可用的开关行。
   不能披露的行不隐藏，而是灰显并写明原因（`无注入` / `不可披露`），并标注 `内置` 或第三方。
 - **未参与折叠（只读）** —— 没有家族的第三方包，以及一行「另有 N 个内置插件的包未参与折叠」的注脚。
-- **行为细节** —— list 详细度、直呼拦截、执行期守卫、并发声明、会话内冻结、未知归属策略。
+  每行写明原因（已在该家族网关后 / 工具全部常驻 / 不注册工具 / 认不出归属 / 归属异常）。
+- **自检（D1–D9）** —— 只有发现问题时才出现：红色是「本插件内部自相矛盾」，黄色是要留意，蓝色是说明。
+- **行为细节** —— list 详细度、直呼拦截、执行期守卫、并发声明、会话内冻结、未知归属策略、建族阈值。
 - 底部三个批量按钮：全部家族折叠 / 全部家族常驻 / 全部插件可披露。
 - 右上角的「刷新清单」走 `POST /api/dsh-tool-gate/describe/refresh`：它会丢掉工具扫描
   的计划缓存与归属索引，重新读盘、重建家族表，再把新快照还给页面。**装完插件不用重启，
@@ -138,29 +144,42 @@ blender_plugin  { action: "call", tool: "blender_rt_do",
     alwaysExpose: [some_tool]      # 强制常驻
     alwaysHide: []                 # 强制收起
     maxDescriptionChars: 0         # 网关描述的字数上限，0 = 不限（默认）
-    families:            # 键是 family id（不是网关名、不是标签）
+    degenerateThreshold: 3         # 建族门槛：可折叠节省须超过 3× 网关成本（默认 3）
+    verifyAttribution: true        # 用已安装包的源码声明反证归属（默认开；关掉就退回「信实时答案」）
+    families:            # 键是 family id（不是网关名、不是标签）；旧键名按 aliases 回退
       blender_plugin:
         label: Blender  # 唯一能盖掉派生标签的地方
         packages: [dsh-blender-plugin]
+        force: true     # 省不回网关成本也建族
       mcp_servers:
         prefixes: ["mcp__"]
+      hindsight-coding-agents:  # 不存在的键会被报成 unknown-family-key，不再静默
+        aliases: [dsh, old_key]  # 让老配置继续生效
 ```
 
 ## 归属怎么认
 
-**工具归属**（决定哪些工具被收起）按优先级四层：
+**工具归属**（决定哪些工具被收起）按优先级四层，每条答案都带**来源与置信度**，不是光秃秃一个包名：
 
 1. **实时注册包装**（`internal/get` 拿到的 tools 实例，包一层 `register`）——
-   从调用栈回溯到最近的 `package.json` 的 `name`。本插件挂载后发生的注册全走这条。
+   从注册所在的上下文与调用栈回溯到 `package.json` 的 `name`，再过 `canonicalPackage()`
+   归一化（这一步是 0.9.0 加的：不做的话 `…/dsh` 这样的说明符会变成另一个身份）。
+   本插件挂载后发生的注册全走这条。
 2. **读盘扫描**（`lib/tool-scan.js`）—— 本插件挂载前就已注册完的工具，注册早已结束，
    没人观察得到。于是去问安装的包本身：谁的源码里出现 `name: "<这个工具>"`（或
-   `name: 常量` + `const 常量 = "…"`），这个工具就属于谁。**装新插件不需要改本仓库
-   任何文件**，装上就生效。只扫 profile 的 bundle 列表、只查还没归属的名字，
-   一次约 0.5 秒（161.7 ms / 24 bundle / 1286 文件），计划按 profile 的
-   `package.json` 指纹缓存——安装必定改写它，所以不需要谁记得清缓存。
-3. **内置表**（`lib/builtin-attribution.js`，141 条）—— 第一方包的兜底，且只认
+   `name: 常量` + `const 常量 = "…"`），这个工具就属于谁；源码里的前缀常量
+   （`const TOOL_PREFIX = "ops_"`）也算声明。**装新插件不需要改本仓库任何文件**，
+   装上就生效。只扫 profile 的 bundle 列表、只查还没归属的名字，
+   一次约 1.2 秒（1629 文件 / 25MB），按 profile 的 `package.json` 指纹缓存 ——
+   安装必定改写它，所以不需要谁记得清缓存。
+3. **内置表**（`lib/builtin-attribution.js`）—— 第一方包的兜底，置信度低，且只认
    「注册表当前真的有」的名字，避免为没装的插件造网关。
 4. **认不出** —— 按 `unknownOwnerPolicy` 决定留在 wire（默认）还是收起。
+
+拿到答案之后还要**校验**（`lib/attribution-verify.js`）：归属落在引擎包上
+（`@deepseek-ai/dsh-agent-loop` 之类）时，先问包自己的源码认不认这个名字，认就改判给那个包；
+改不了就降级为「未知」，也就是留在 wire 上。0.9.0 之前这个位置是「信」，于是 18 个 `ops_*`
+全部记在引擎名下、成了一个叫「Agent Loop」的家族。
 
 `mcp__<server>__<tool>` 自动归到 `mcp_servers` 家族，按服务器名分组。
 
@@ -254,7 +273,12 @@ lib/tool-scan.js     读盘扫描：问已安装的包「这个工具名在哪�
 lib/discovery.js     从归属快照推导家族表：一个插件包 = 一个家族
 lib/plugin-meta.js   网关描述的通用来源：读宿主的 pluginPackages（两层兜底 + mtime/上限缓存）
 lib/family-labels.js 标签派生（包名 → 去前缀 → title-case，缩写词大写；没有表）
-lib/ownership-channel.js  归属通道 + 包名归一化（barePackageName）与「第一方」判定
+lib/ownership-channel.js  归属通道 + 包名归一化（canonicalPackage / barePackageName）与「第一方」判定
+lib/engine-packages.js    引擎包与上下文包的判定（归属落在引擎上就降级为未知，不成族）
+lib/attribution-verify.js 归属校验：拿包自己的源码声明反证、前缀认领、矛盾告警，纯函数
+lib/resident.js           唯一的常驻判据（owner + 前缀推导，含 ops_* 规则）
+lib/degenerate.js         建族门槛：可折叠成员与 k×网关成本的比较（k=3）
+lib/diagnostics.js        自检 D1–D9，纯函数，输出给设置页
 lib/families.js      家族表装配、归属解析、冻结面构造（code-unit 排序）
 lib/gateways.js      网关的 defineTool 定义与注册（描述只说这个家族做什么）
 lib/dispatch.js      list / call 的实现（含 turn 语义上抛、提示词回吐）
@@ -270,6 +294,8 @@ scripts/dev-link.mjs                把宿主包 junction 到本地 node_modules
 test/run.mjs                        单元测试
 test/e2e.mjs                        端到端（fake host 驱动真实 apply()，17 个场景）
 test/client.mjs                     渲染冒烟：用最小 React shim 跑一遍设置页组件
+test/naming.mjs                     命名/分类/校验层：包名归一化、家族命名、常驻判据、k=3 门槛、D1–D9
+test/all.mjs                        五套件顺序跑（每套独立进程）
 ```
 
 设计文档在 `docs/`：`设计蓝图.md`（为什么这么设计）、`落地方案.md`（实现规格与验收）、
@@ -355,7 +381,72 @@ node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>   # 只需一次
 node test/run.mjs    # 单元：Config / 家族 / 冻结面 / 网关 schema / 派发 / 状态隔离 / record / 归属通道 / 扫描失效 / 标签派生
 node test/e2e.mjs    # 端到端：fake host 驱动真实 apply()，17 个场景（含 refreshContext、作用域注册、空网关、撤回解冻）
 node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓出悬空变量与 hook 顺序问题
+node test/naming.mjs # 0.9.0 四层：包名归一化 / 家族命名（永不含数字）/ 常驻判据 / 退化阈值 k=3 / 归属校验 R-a..R-c / 自检 D1–D9
+node test/all.mjs    # 五套件顺序跑一遍（各自独立进程，互不共享全局状态）
 ```
+
+## 0.9.0 的改动
+
+三个 bug，一个根因：**归属与命名各有两个来源，而没有一个地方说哪个算数**。
+
+| 现象 | 根因 |
+| --- | --- |
+| 网关叫 `subagent2` | id 冲突时追数字后缀，数字进了 wire 名、配置键、页面 id |
+| 家族键是 `@vectorize-io/hindsight-coding-agents/dsh` | 归属原样记下模块说明符，没归一化成包名；`families.hindsight_coding_agents` 配了等于没配 |
+| 18 个 `ops_*` 归到「Agent Loop」，7 个常驻、11 个被藏 | 「注册发生在谁的上下文里」被当成「谁注册的」；`dsh-ops` 往 agent 作用域注册，最近的那个 entry 是宿主。另外保留集是手写的 7 条 |
+
+修复按四层分开，每层都只有一个判定点：
+
+**身份层** —— `canonicalPackage()` 是唯一的包名归一化入口（去掉子路径、拒绝相对/绝对/协议 URL），
+`owner.js` 的实时通道与栈回溯都过它；归属结果不再是一个字符串，而是 `OwnerIdentity { pkg, specifier, source, confidence, evidence }`。
+新增 `engine-packages.js` 列出引擎包（`@deepseek-ai/dsh-agent-loop` 这类），
+引擎包给出的归属一律降级为「未知」而不是成族 —— 未知意味着留在 wire 上，出错的方向是多花 token 而不是藏掉工具。
+`attribution-verify.js` 拿已安装包的**源码声明**反证归属：R-a 前缀认领（`dsh-ops` 声明 `ops_`）、
+R-b 引擎反证（包的源码写了这个名字，宿主就赢不了）、R-c 矛盾告警。它修不了的一律降级露出，绝不凭空发明归属。
+
+**命名层** —— 四个名字一个含义：`familyId` = `wireName`（全局唯一、不含数字）、`label`（展示用，撞名时加包名末段）、
+`configKey`（+`aliases`）。冲突时依次尝试 `subagent` → `subagent_tools` → `deepseek_ai_subagent`，
+三次都不行就不建家族，并在自检里报 `id-collision`。数字后缀从此不再产生，只是**认得**（`subagent2..9` 当曾用名）。
+
+**分类层** —— 常驻判据收敛成 `resident.js` 的一个函数，由 owner + 前缀推导：
+用户 pin、核心名、引擎包、`ops_*` 且 owner 是 `dsh-ops`、上下文包。
+成族、藏工具、卡片计数、退化判定四处共用它，`keep-tools.js` 里那份手写 OPS 表删掉了。
+建族还多了一道门槛（`degenerate.js`）：
+
+```
+可折叠节省 = Σ tokens(非常驻成员)
+网关成本   = tokens(网关 schema + 描述) + 60
+建族 ⇔ 可折叠成员 ≥ 1 且 可折叠节省 > 3 × 网关成本
+```
+
+`k = 3` 是可配置的（`degenerateThreshold`），`force: true` 可以按家族强行建族。
+省不到三个网关的家族不建族、不建网关，工具全部常驻，页面上写清原因 —— 宁可没省，也不要一个「点开只有一个成员」的网关。
+
+**呈现层** —— `ungrouped.reason` 不再默认 `resident`，而是按证据分五种：
+`claimed`（已在该家族的网关后面）、`no-collapsible-members`、`no-tools`、`unowned`、`misattributed`（红标）。
+新增自检 D1–D9（`diagnostics.js`），每次快照都跑一遍，问题直接显示在设置页顶部：
+
+| 断言 | 严重度 | 含义 |
+| --- | --- | --- |
+| D1 `uncovered-tools` | error | 工具有归属，却既不常驻也不在任一家族 —— 归属逻辑漏了一块 |
+| D2 `claimed-without-members` / `specifier-as-package` | error | 家族声明了某个包，但该包的工具不在里面 / packages 里出现模块说明符 |
+| D3 `false-resident-reason` | error | 「工具全部常驻」这一行里还有工具不是常驻 —— 就是这次的那个错因 |
+| D4 `wire-collides-with-tool` / `wire-has-digit` / `wire-duplicate` | error | 网关名撞工具名（会遮住真工具）、含数字、两个家族重名 |
+| D5 `degenerate-family:<reason>` | warn | 启用了，但省不回网关成本 |
+| D6 `low-confidence-attribution` | warn | 家族名下有归属置信度低的成员 |
+| D7 `half-collapsed-family` | info | 一半常驻一半可折叠（合法，但要说出来） |
+| D8 `unknown-family-key` / `config-alias` | warn / info | 配置键匹配不到任何家族 / 按曾用名生效了 |
+| D9 `id-collision` | info | 某个包因为拿不到干净的名字而没被折叠 |
+
+设置页也跟着改：家族行多了「未折叠」标记、`配置键 X（曾用名：…）`、`可折叠 n/m（净省 X tok，网关成本 Y）`，
+「未参与折叠」区写的是五种原因之一而不是干巴巴的「常驻」。
+
+**迁移** —— 旧配置键不用改：`families.dsh`（旧说明符名）与 `families.subagent2`（旧数字名）都作为别名生效，
+命中了会在自检里记一条 `config-alias`。反而要删的是那四个**止血键** —— 0.8.x 时期在 profile 的
+`cordis.patch.yml` 里为绕开本 bug 加的 `hindsight_coding_agents` / `dsh` / `fs:false` / `subagent2:false` /
+`agent_loop:false` / `schedule:false`。它们本来就是「让这个 bug 看起来不存在」的补丁；
+0.9.0 之后留着只会互相抵消。
+
 
 ## 0.8.0 的改动
 

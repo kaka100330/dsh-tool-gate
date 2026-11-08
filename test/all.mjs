@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
-const SUITES = ["run.mjs", "e2e.mjs", "provider-owned.mjs", "client.mjs"];
+const SUITES = ["run.mjs", "e2e.mjs", "provider-owned.mjs", "client.mjs", "naming.mjs"];
 
 let failed = 0;
 for (const suite of SUITES) {
