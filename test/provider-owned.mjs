@@ -361,11 +361,25 @@ assert.equal(schemas.includes("demo_one"), true, "members stay callable in the r
   assert.equal(host.wire(agent).join(","), first, "wire is byte-stable across assemblies");
 }
 
-// 9. Disabling must give the tools back.
+// 9. Disabling must give the tools back — and must not dispose the executor.
+//    `setExecutor` leaves its scope record behind with `executor: undefined`, and
+//    `selectExecutor()` treats that record as authoritative, so disposing the
+//    wrapper would fail every later assembly with TOOL_EXECUTOR_UNAVAILABLE
+//    instead of falling back to the deployment executor.
 {
   config.enabled = false;
   await host.assemble(agent);
-  assert.equal(host.wire(agent).includes("demo_one"), true, "disable restores the members");
+  const wire = host.wire(agent);
+  assert.equal(wire.includes("demo_one"), true, "disable restores the members");
+  assert.equal(wire.includes("resident_tool"), true, "and keeps everything else");
+  assert.equal(wire.includes("demo_plugin"), false, "the gateway is gone");
+}
+
+// 10. A later assembly still resolves an executor: disabling degraded the
+//     filter, it did not remove it.
+{
+  const again = await host.assemble(agent);
+  assert.equal(again.tools.some((tool) => tool.name === "demo_one"), true, "and stays disabled");
 }
 
 console.log("ALL PROVIDER-OWNED CHECKS PASSED");
