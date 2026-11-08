@@ -57,6 +57,12 @@ function createHost() {
     };
   };
 
+  /** Fire an event the way `ctx.emit` does: synchronously, to every listener. */
+  const emit = (event, payload) => {
+    for (const fn of [...(listeners.get(event) ?? [])]) fn(payload);
+    return undefined;
+  };
+
   const visible = () => new Map(definitions);
 
   const toolsService = {
@@ -68,8 +74,13 @@ function createHost() {
     register(definition) {
       if (definitions.has(definition.name)) throw new Error(`duplicate tool ${definition.name}`);
       definitions.set(definition.name, definition);
+      // 0.2.2 emits this from `ScopedLayers` whenever a layer's tool table moves.
+      emit("tools/change");
       return () => {
-        if (definitions.get(definition.name) === definition) definitions.delete(definition.name);
+        if (definitions.get(definition.name) === definition) {
+          definitions.delete(definition.name);
+          emit("tools/change");
+        }
       };
     },
     get(name) {
@@ -185,7 +196,7 @@ function createHost() {
   };
 
   /** Give an agent the scoped context the plugin reaches through `agent.ctx`. */
-  const makeAgent = (id) => {
+  const makeAgent = (id, options = {}) => {
     const agent = { id, session: { log: [] } };
     const scopedCtx = Object.create(toolsService);
     agent.ctx = { tools: {
@@ -198,7 +209,13 @@ function createHost() {
         return executors.get(agent) ?? rootExecutor;
       },
     } };
+    // `agents.list()` is how a host reports agents that already exist, which is
+    // what the plugin falls back to when no `agent/created` ever ran for one.
     agents.push(agent);
+    if (options.announce !== false) {
+      // `agent/created` is the hook that precedes an agent's first provider call.
+      emit("agent/created", { agent });
+    }
     return agent;
   };
 
@@ -309,14 +326,21 @@ const agent = host.makeAgent("s1");
 const first = await host.assemble(agent);
 assert.equal(host.definitions.has("demo_plugin"), true, "gateway registered on the 0.2.2 contract");
 
-// 3. The first payload still carries the members, and that is correct: the
-//    provider ran before this waterfall, so the gateway mounted during it is not
-//    in the payload the listener is looking at. Nothing was removed from a
-//    payload that has no way to reach those tools.
+// 3. The FIRST payload is already collapsed.
+//
+//    This is the point of deciding inside `describe()` rather than in the
+//    waterfall: the provider is asked for the list this request is built from, so
+//    the decision lands in the same round. Deciding one round later is not a
+//    detail — a session's first round is exactly where the tokens are spent.
+//
+//    Note the gateway is on that very wire. The collapse rule refuses to hide a
+//    member whose gateway is absent, so this assertion is what proves the
+//    gateway was mounted before the provider collected, not after.
 {
   const names = first.tools.map((tool) => tool.name);
-  assert.equal(names.includes("demo_one"), true, "first payload leaves members visible");
-  assert.equal(names.includes("demo_plugin"), false, "its gateway is not in that payload");
+  assert.equal(names.includes("demo_one"), false, "first payload already hides the member");
+  assert.equal(names.includes("demo_plugin"), true, "and its gateway is right there to reach it");
+  assert.equal(names.includes("resident_tool"), true, "unowned tools stay");
 }
 
 // 4. From the next assembly on, the members are gone and the gateway is there.
@@ -380,6 +404,55 @@ assert.equal(schemas.includes("demo_one"), true, "members stay callable in the r
 {
   const again = await host.assemble(agent);
   assert.equal(again.tools.some((tool) => tool.name === "demo_one"), true, "and stays disabled");
+}
+
+// 11. A family that appears mid-session is folded in the round it appears — by a
+//     *fresh* agent, which is the case a new subagent or a resumed session hits.
+//     The old design needed one round to notice the gateway, so this round shipped
+//     `late_tool` on its own.
+{
+  config.enabled = true;
+  const late = host.makeAgent("s2");
+  fixture.register(host.toolsService, make("late_tool"));
+
+  const round = await host.assemble(late);
+  const names = round.tools.map((tool) => tool.name);
+  assert.equal(names.includes("late_tool"), false, "a tool mounted just before the round is folded in that round");
+  assert.equal(names.includes("demo_plugin"), true, "and its family's gateway is already on that wire");
+}
+
+// 12. Switching the gate on mid-session folds in that same round. The tools were
+//     registered while it was off, so no `tools/change` reconcile ever mounted a
+//     gateway for them; the round that notices the flip has to mount it itself,
+//     or the user pays one more round of full disclosure for the privilege of
+//     having just asked for the opposite.
+{
+  config.enabled = false;
+  await host.assemble(agent);
+  assert.equal(host.wire(agent).includes("demo_plugin"), false, "off: no gateway");
+
+  config.enabled = true;
+  const round = await host.assemble(agent);
+  const names = round.tools.map((tool) => tool.name);
+  assert.equal(names.includes("demo_plugin"), true, "on: the gateway mounts in the very round the flip is seen");
+  assert.equal(names.includes("demo_one"), false, "and the member is hidden on that same wire");
+}
+
+// 13. An agent that never announced itself still gets its filter before its
+//     first request: `agents.list()` at the next registry move is the last hook
+//     that precedes one. This is the case of an agent restored into the process
+//     by something other than the normal factory path.
+//
+//     It only works because a registration always precedes a request in a real
+//     host — nothing can install a filter for an agent that neither announced
+//     itself nor coexisted with a single tool registration.
+{
+  const silent = host.makeAgent("s3", { announce: false });
+  fixture.register(host.toolsService, make("quiet_tool"));
+  const round = await host.assemble(silent);
+  const names = round.tools.map((tool) => tool.name);
+  assert.equal(names.includes("quiet_tool"), false, "an unannounced agent is folded too, in its first round");
+  assert.equal(names.includes("demo_plugin"), true, "with its gateway on the wire");
 }
 
 console.log("ALL PROVIDER-OWNED CHECKS PASSED");
