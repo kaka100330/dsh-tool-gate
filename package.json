@@ -75,5 +75,8 @@
         "@deepseek-ai/dsh-client-ui-settings-plugins"
       ]
     }
+  },
+  "scripts": {
+    "test": "node test/all.mjs"
   }
 }
