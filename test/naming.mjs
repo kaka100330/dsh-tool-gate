@@ -106,6 +106,19 @@ const DIGITS = /[0-9]/;
   assert.ok(hindsight.aliases.includes("dsh"),
     "the Loader specifier it used to be keyed by is an alias, so `families.dsh` keeps working");
 
+  // The plugin's *own* gateways must never count as taken ids: they are derived
+  // from the family table, so counting them makes the table depend on itself (round
+  // one registers `github`, round two renames the family to `github_tools` and the
+  // session ends up with two gateways for one family). `index.js` excludes them
+  // before calling here; this pins the shape that makes that work.
+  const stable = disc.deriveFamilies({
+    owners: { github_tools: "dsh-tool-gate", gh_issue: "dsh-github" },
+    reservedIds: ["gh_issue"],   // what the caller passes: everything the gate does not own
+    selfPackage: "dsh-tool-gate",
+  });
+  assert.deepEqual(Object.keys(stable), ["github"], "the family keeps its plain id round after round");
+  assert.equal(stable.github.wire, "github");
+
   // A resident tool is its package's only tool ⇒ no family, no gateway, no switch.
   assert.equal(Object.values(families).some((family) => family.packages.includes("dsh-tool-something-else")), false,
     "a package whose tools are all resident defines no family");
@@ -371,6 +384,7 @@ const DIGITS = /[0-9]/;
       gateways: new Map([["alpha", "alpha_tools"]]),
       toolNames: ["a1", "a2", "alpha_tools"],
       isResident: () => false,
+      selfPackage: "dsh-tool-gate",
       assessments: new Map([["alpha", { worth: true, count: 2, residentCount: 0, collectableCount: 2,
         collectableTokens: 4000, cost: 80, saving: 3920, threshold: 3, ratio: 49, reason: "collectable",
         forced: false, halfCollapsed: false }]]),
@@ -392,6 +406,11 @@ const DIGITS = /[0-9]/;
   assert.equal(has(d1, "D1", "uncovered-tools"), true);
   assert.equal(d1.find((row) => row.id === "D1").severity, "error");
 
+  // …but this plugin's own gateways are its output, not members of a family: they
+  // are attributed to the gate and can never appear in a `family.packages` list.
+  assert.equal(check((input) => { input.owners.github_tools = "dsh-tool-gate"; }).length, 0,
+    "a gateway owned by the plugin itself is not an uncovered tool");
+
   // D2 — a family keyed by a specifier (the hindsight shape)…
   const d2a = check((input) => {
     input.families.beta = { id: "beta", label: "Beta", packages: ["@acme/pkg/lib"], prefixes: [], tools: [], enabled: true };
@@ -399,13 +418,22 @@ const DIGITS = /[0-9]/;
   });
   assert.equal(has(d2a, "D2", "specifier-as-package"), true);
 
-  // …and a package claimed by a family that holds none of its tools.
+  // …and a package whose tools actually landed in a *different* family.
   const d2b = check((input) => {
     input.families.beta = { id: "beta", label: "Beta", packages: ["dsh-beta"], prefixes: [], tools: [], enabled: true };
     input.owners.b1 = "dsh-beta";
     input.membersByFamily.set("beta", []);
+    input.membersByFamily.set("alpha", ["a1", "a2", "b1"]);  // the split
   });
   assert.equal(has(d2b, "D2", "claimed-without-members"), true);
+
+  // A package that registers nothing here (or whose tools are all resident) has no
+  // members to claim and is not a defect — `fs_search` and `pwsh_persistent` are
+  // exactly this shape in a real profile, and flagging them made the check cry wolf.
+  assert.equal(check((input) => {
+    input.families.beta = { id: "beta", label: "Beta", packages: ["dsh-beta"], prefixes: [], tools: [], enabled: true };
+    input.membersByFamily.set("beta", []);
+  }).length, 0, "an empty package is not a split claim");
 
   // D3 — the false `resident` reason this release started from.
   const d3 = check((input) => {
@@ -414,6 +442,7 @@ const DIGITS = /[0-9]/;
   assert.equal(has(d3, "D3", "false-resident-reason"), true);
   assert.equal(check((input) => {
     input.ungrouped.push({ package: "dsh-gamma", reason: "no-collapsible-members", tools: ["g1"] });
+    input.isResident = (name) => name === "g1";
   }).length, 0, "the truthful reason is not flagged");
 
   // D4 — a gateway named like a tool, carrying a digit, or shared with another.
@@ -431,7 +460,16 @@ const DIGITS = /[0-9]/;
     input.assessments.set("alpha", { ...input.assessments.get("alpha"), worth: false, reason: "below-threshold", saving: 10 });
   });
   assert.equal(has(d5, "D5", "degenerate-family:below-threshold"), true);
-  assert.equal(d5.find((row) => row.id === "D5").severity, "warn");
+  assert.equal(d5.find((row) => row.id === "D5").severity, "warn", "fixable by force/threshold ⇒ warn");
+
+  // "Nothing collectable" is a fact, not a defect: every member is resident, and no
+  // setting changes that. It stays visible, in blue.
+  const d5b = check((input) => {
+    input.assessments.set("alpha", { ...input.assessments.get("alpha"), worth: false,
+      reason: "no-collectable-members", collectableCount: 0, saving: -80, halfCollapsed: false });
+  });
+  assert.equal(has(d5b, "D5", "degenerate-family:no-collectable-members"), true);
+  assert.equal(d5b.find((row) => row.id === "D5").severity, "info");
 
   // D6 — a family resting on weak attribution.
   const d6 = check((input) => {

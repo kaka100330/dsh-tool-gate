@@ -408,6 +408,12 @@ R-b 引擎反证（包的源码写了这个名字，宿主就赢不了）、R-c 
 `configKey`（+`aliases`）。冲突时依次尝试 `subagent` → `subagent_tools` → `deepseek_ai_subagent`，
 三次都不行就不建家族，并在自检里报 `id-collision`。数字后缀从此不再产生，只是**认得**（`subagent2..9` 当曾用名）。
 
+这里有一条只有真跑起来才会发现的自指陷阱：**「哪些名字已被占用」不能包含本插件自己的网关**。
+网关名是家族表的输出，把它当输入就成了「第一轮注册 `github`，第二轮发现 `github` 已被占，
+于是家族改名 `github_tools`」—— 一个家族两个网关，而这一轮的冻结面还把旧名字一起冻住了。
+所以 `reservedIds` 会先滤掉本插件拥有的所有工具；别人的同名工具仍然是真冲突，仍然要后缀。
+线上实测这一条之前，`github` / `free_search` / `video_storyboard` 都被改成了 `*_tools`。
+
 **分类层** —— 常驻判据收敛成 `resident.js` 的一个函数，由 owner + 前缀推导：
 用户 pin、核心名、引擎包、`ops_*` 且 owner 是 `dsh-ops`、上下文包。
 成族、藏工具、卡片计数、退化判定四处共用它，`keep-tools.js` 里那份手写 OPS 表删掉了。
@@ -432,20 +438,35 @@ R-b 引擎反证（包的源码写了这个名字，宿主就赢不了）、R-c 
 | D2 `claimed-without-members` / `specifier-as-package` | error | 家族声明了某个包，但该包的工具不在里面 / packages 里出现模块说明符 |
 | D3 `false-resident-reason` | error | 「工具全部常驻」这一行里还有工具不是常驻 —— 就是这次的那个错因 |
 | D4 `wire-collides-with-tool` / `wire-has-digit` / `wire-duplicate` | error | 网关名撞工具名（会遮住真工具）、含数字、两个家族重名 |
-| D5 `degenerate-family:<reason>` | warn | 启用了，但省不回网关成本 |
+| D5 `degenerate-family:below-threshold` | warn | 启用了，但省不回 `k×` 网关成本（可 `force: true` 或调低阈值） |
+| D5 `degenerate-family:no-collectable-members` | info | 成员全部常驻，没有可折叠的东西 —— 事实陈述，不是缺陷 |
 | D6 `low-confidence-attribution` | warn | 家族名下有归属置信度低的成员 |
 | D7 `half-collapsed-family` | info | 一半常驻一半可折叠（合法，但要说出来） |
 | D8 `unknown-family-key` / `config-alias` | warn / info | 配置键匹配不到任何家族 / 按曾用名生效了 |
 | D9 `id-collision` | info | 某个包因为拿不到干净的名字而没被折叠 |
+
+三条规则在线上实测后收窄过一次，都写进了自检，免得下一版再把它们放宽：
+
+- D1 不把**本插件自己的网关**算成「有归属却没被任何家族收走」—— 网关是家族的脸，天生不在
+  `family.packages` 里。之前它会对每个网关报一条 error。
+- D2 只在「该包的工具落在了**别的**家族里」时才算错。一个包在当前安装里根本没注册工具
+  （`fs_search`、`pwsh_persistent` 就是这样）或成员全部常驻，都不构成 split。
+- D5 区分两种不成立：省不回成本（可改，黄）与没有可折叠的成员（不可改，蓝）。
+  空家族（`no-members`）不再报 —— 它的插件本来就没注册工具。
 
 设置页也跟着改：家族行多了「未折叠」标记、`配置键 X（曾用名：…）`、`可折叠 n/m（净省 X tok，网关成本 Y）`，
 「未参与折叠」区写的是五种原因之一而不是干巴巴的「常驻」。
 
 **迁移** —— 旧配置键不用改：`families.dsh`（旧说明符名）与 `families.subagent2`（旧数字名）都作为别名生效，
 命中了会在自检里记一条 `config-alias`。反而要删的是那四个**止血键** —— 0.8.x 时期在 profile 的
-`cordis.patch.yml` 里为绕开本 bug 加的 `hindsight_coding_agents` / `dsh` / `fs:false` / `subagent2:false` /
-`agent_loop:false` / `schedule:false`。它们本来就是「让这个 bug 看起来不存在」的补丁；
-0.9.0 之后留着只会互相抵消。
+`cordis.patch.yml` 里为绕开本 bug 加的四个家族键 `dsh`（顶替说明符名）/ `subagent2` / `agent_loop` / `fs:false`。
+它们本来就是「让这个 bug 看起来不存在」的补丁：`agent_loop` 那个家族现在根本不会产生（`ops_*` 按规则常驻），
+`subagent2` 的三个成员本来就是核心工具，`fs` 也一样。留着只会让人以为家族还在被压着。
+（`schedule: false` 不属于止血键，那是用户自己的偏好，保留。）
+
+必须提前说清楚的一件小事：止血键删掉之后，**`families.agent` / `families.mcp_servers` / `families.session_query` /
+`families.tavily` 会在自检里变成 `unknown-family-key` 警告** —— 它们本来就已经失配了（这版 profile 里没有
+这几个家族），只是 0.8.x 把这四行静默丢掉了。0.9.0 不替你删配置，只是不再假装没看见。
 
 
 ## 0.8.0 的改动
