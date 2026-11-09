@@ -742,8 +742,8 @@ console.log("OK gate record");
     fs.writeFileSync(path.join(root, "package.json"),
       JSON.stringify({ name: "probe-profile", dsh: { profile: { bundles } } }));
   };
-  const previousProfile = process.env.DSH_PROFILE_DIR;
-  process.env.DSH_PROFILE_DIR = root;
+  const { setProfileRoot } = await import(at("lib/tool-scan.js"));
+  setProfileRoot(root);
   try {
     bundle("dsh-first", "alpha_tool");
     writeProfile(["dsh-first"]);
@@ -792,8 +792,7 @@ console.log("OK gate record");
     assert.equal(index.ownerOf("alpha_tool"), "dsh-first", "scanned ownership survives");
     index.dispose();
   } finally {
-    if (previousProfile === undefined) delete process.env.DSH_PROFILE_DIR;
-    else process.env.DSH_PROFILE_DIR = previousProfile;
+    setProfileRoot(undefined);
     forgetScanCache();
     fs.rmSync(root, { recursive: true, force: true });
   }

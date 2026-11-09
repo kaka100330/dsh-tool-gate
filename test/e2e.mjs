@@ -38,7 +38,7 @@ const plugin = await import(at("lib/index.js"));
 // ————————————————————————————————————————————————————————————————
 // A fake host
 // ————————————————————————————————————————————————————————————————
-function createHost(options = {}) {
+function createHost({ profileContext = FIXTURE_PROFILE_CONTEXT, ...options } = {}) {
   const listeners = new Map(); // event -> [fn]
   const tools = new Map(); // name -> definition
   const scopedTools = new Map(); // agent -> Map<name, definition>
@@ -288,6 +288,9 @@ function createHost(options = {}) {
     if (name === "systemPrompt") return systemPrompt;
     if (name === "agents") return { list: () => agents };
     if (name === "webServer") return options.webServer;
+    // The host provides this at its root before any bundle mounts; `lib/index.js`
+    // reads `dir` from it to anchor the on-disk scan.
+    if (name === "profileContext") return profileContext;
     return undefined;
   };
 
@@ -414,11 +417,12 @@ fs.rmSync(FIXTURE_ROOT, { recursive: true, force: true });
 const fixtureModules = new Map();
 const fixtureBundles = new Set();
 
-// The on-disk scan (`lib/tool-scan.js`) reads the *profile*, so point it at this
-// fixture tree. That way a tool registered before the plugin mounts is placed by
-// reading the package that declares it — exactly the path a freshly installed
-// plugin takes on a real machine.
-process.env.DSH_PROFILE_DIR = FIXTURE_ROOT;
+// The on-disk scan (`lib/tool-scan.js`) reads the *profile*, so every fake host
+// below hands this fixture tree over as `profileContext` — the same service the
+// real host provides at its root, and the only way `lib/index.js` learns which
+// profile to read. A host that provides nothing leaves the scan unanchored, which
+// is what the "no profile" case exercises.
+const FIXTURE_PROFILE_CONTEXT = { name: "dsh-tool-gate-e2e-profile", dir: FIXTURE_ROOT };
 
 function writeProfileManifest() {
   fs.mkdirSync(FIXTURE_ROOT, { recursive: true });

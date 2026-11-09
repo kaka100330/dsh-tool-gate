@@ -272,6 +272,41 @@ contexts.push(provider === void 0 ? accepted : resolveContext(provider, context)
   没有撤回的一轮不会重建（场景 17 两头都断言）。
 
 
+## 权限、外部依赖与失败边界
+
+写给装它的人，也写给商店审阅。
+
+**不要任何权限。** 没有 `child_process`、没有 `eval` / `new Function`、没有安装钩子
+（`preinstall` / `install` / `postinstall` / `prepare` 一律未声明）、不发起任何外部网络请求、
+不读任何环境变量。本插件在内存里改的是 `tools` 的装配结果，不是进程。
+（静态扫描仍会看到两处网络相关用法，见下方「已知例外」。）
+
+**读盘是只读的。** `lib/owner.js`、`lib/tool-scan.js`、`lib/plugin-meta.js` 会读已安装插件包的
+`package.json` 与源文件，回答「这个工具名是哪个包注册的」——注册表不带作者信息，这是唯一
+可靠的来源。只有 `readFileSync` / `readdirSync` / `statSync`，从不 `writeFile` / `mkdir` / `rm`；
+范围是当前 profile（宿主经 `profileContext` 交过来的目录）的 `dsh.profile.bundles`，
+不遍历整个磁盘。唯一的写盘是宿主自己的 plugin record（`@deepseek-ai/dsh-session` 的
+`appendPluginRecord`），用于会话恢复时重建网关名，只存名字不存 schema。
+
+**设置页只有一个副作用接口。** 浏览器侧 `lib/client.js` 只调本插件两条路由：
+`GET /api/dsh-tool-gate/describe`（只读快照）和
+`POST /api/dsh-tool-gate/describe/refresh`（丢掉扫描缓存、让下一次读盘重新发生）。
+后者不写磁盘、不改配置。
+
+**外部服务：没有。** 不连服务器、不读任何凭据文件、不发遥测、不上报任何东西。
+外部包只有宿主自带的 `@deepseek-ai/schemastery` 与三个可选的 `@deepseek-ai/dsh-*` peer。
+
+**已知例外（诚实列出）。** `lib/bridge.js` 用 `node:net` 只为给路由返回一个本机 socket 地址；
+`lib/client.js` 里的 `fetch(` 调的就是上面那两条同源路由（`credentials: "same-origin"`），
+不出网。这两处都会让静态扫描把本插件标成「接触网络」，标记本身是准的。
+
+**失败边界。** 每处读盘都在 `try` 里，失败只降级、不抛出：
+- 拿不到 profile 目录 → 读盘扫描放弃，归属退到实时注册捕获 + 内置快照表，页面标「未知」。
+- 某个包的源码读不懂 → 那个包不参与回答，别的家族不受影响。
+- 两个包都声明同名工具 → 只报给页面，不猜一个。
+- 宿主的 `agents` / `tools` 服务缺失 → 降级成「只注册网关、不折叠」，不阻断启动。
+- 关掉插件开关 → 所有工具下一轮就回来；不修改注册表，不留残留状态。
+
 ## 文件
 
 ```
@@ -307,15 +342,23 @@ test/naming.mjs                     命名/分类/校验层：包名归一化、
 test/all.mjs                        五套件顺序跑（每套独立进程）
 ```
 
+`test/` 与 `scripts/dev-link.mjs` **不进发布包**（`files` 里没有它们）：它们是开发和测试用具，
+跑测试时用仓库里的那份。`scripts/gen-*.mjs` 会进发布包——装完新插件后用户要自己跑一次
+（见 [安装注意](#安装注意) 一节上面的用法）。
+
 设计文档在 `docs/`：`设计蓝图.md`（为什么这么设计）、`落地方案.md`（实现规格与验收）、
 `工具家族与权重.md`（141 个工具逐项 tok 权重）、`改进方案.md`（通用性审计与性能排名）、
 `改进方案-网关描述与提示词分层.md`（0.7.0 的依据：描述来源、提示词分层、ungrouped 过滤）。
 
 ## 安装注意
 
-`@deepseek-ai/schemastery` 是唯一运行时依赖。以 `link:` 方式装进 profile 时，
-pnpm 只会把 profile 的 `node_modules` 指向本包，而本包自己的裸导入按**真实路径**解析，
-因此需要在包目录里有一份可解析的宿主包：
+**没有运行时依赖。** `dependencies` 与 `optionalDependencies` 都是空的：唯一硬性用到的外部包
+`@deepseek-ai/schemastery`（`lib/config.js` 的静态导入，宿主自带 3.18.5），与
+`dsh-tools` / `dsh-session` / `dsh-system-prompt` 一样声明在 `peerDependencies` 里，
+由宿主提供。本插件不安装、不锁定、不打包任何第三方代码，仓库里也没有 lockfile。
+
+以 `link:` 方式装进 profile 时，pnpm 只会把 profile 的 `node_modules` 指向本包，
+而本包自己的裸导入按**真实路径**解析，因此需要在包目录里有一份可解析的宿主包：
 
 ```
 node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>
@@ -327,6 +370,16 @@ node scripts/dev-link.mjs <宿主 @deepseek-ai 目录>
 
 `dsh-tools` / `dsh-session` / `dsh-system-prompt` 三个 peer 在**运行时**不需要真实解析
 （宿主在内存里路由），只有直接 `node test/*.mjs` 跑测试时才需要。
+`schemastery` 不同：它是静态导入，**运行时必须能解析**——plugin 装在
+`<profile>/node_modules/dsh-tool-gate` 时由 Node 沿目录树向上找到
+`<profile>/node_modules/@deepseek-ai/schemastery`（宿主自带），因此不需要装第二份；
+上面那个 `dev-link` 只在「以 `link:` 指向本地仓库、本包不在 profile 的 `node_modules` 里」时
+才有必要。
+
+**版本门槛。** `engines.dsh: ">=0.2.1-rc.5"` —— 0.2.1-rc.5 是实测过的基线（本 README 所有
+数字都来自它），0.9.0 的归属修复也是按 0.2.2 的装配事实写的。低于基线的运行时会按宿主规则
+**跳过本插件**（宿主 `evaluatePluginCompatibility` → 该 bundle 进 `skippedBundles`，
+不崩、不动别的插件），不会带病运行。
 
 ## 实测（desktop profile，v0.3.1 的真实会话）
 
@@ -393,6 +446,66 @@ node test/client.mjs # 渲染冒烟：最小 React shim 跑一遍设置页，抓
 node test/naming.mjs # 0.9.0 四层：包名归一化 / 家族命名（永不含数字）/ 常驻判据 / 退化阈值 k=3 / 归属校验 R-a..R-c / 自检 D1–D9
 node test/all.mjs    # 五套件顺序跑一遍（各自独立进程，互不共享全局状态）
 ```
+
+## 0.9.1 的改动
+
+性质是**能力声明与依赖形态的修正**，不改任何运行时行为。起因是商店的固定源码审阅
+（DSH-Store `#1835`）把本插件标成 catalog-blocked，理由是「运行依赖需要单独的供应链审阅、
+没有唯一 lockfile、源码里出现 files / network / commands / credentials 四类能力信号」。
+
+### 依赖：零运行时依赖
+
+`@deepseek-ai/schemastery` 从 `dependencies` 移到 `peerDependencies`（**不设 optional**——
+`lib/config.js` 静态导入它，缺了就是挂不起来，不该假装可选）。它由宿主提供：插件装在
+`<profile>/node_modules/dsh-tool-gate`，Node 沿目录树向上就解析到
+`<profile>/node_modules/@deepseek-ai/schemastery`，不会装第二份，也不需要 lockfile。
+这跟本插件早就这么做的 `dsh-tools` / `dsh-session` / `dsh-system-prompt` 是同一套办法。
+
+没有把 `react` / `react-dom` 声明成 peer：设置页的 `require("react")` 走的是宿主浏览器的
+模块加载器，不是 npm 解析，而 profile 里并没有 `react` 这个包，声明它反而可能让 pnpm 往
+用户的 profile 里装一份多余的 React。
+
+### 权限信号：不再读环境变量
+
+`lib/tool-scan.js` 原本读 `DSH_PROFILE_DIR` 来定位 profile。核实宿主源码后确认：这个变量
+**只被写进模型的 shell 子进程**（`@deepseek-ai/dsh-shell-env`），插件进程根本拿不到——
+也就是说那行代码在本机从未生效，只在 `test/` 里被用到。现在改为宿主本来就提供的服务：
+
+```js
+// lib/index.js，mount 时
+const profile = ctx.get("profileContext");
+if (typeof profile?.dir === "string" && profile.dir !== "") setProfileRoot(profile.dir);
+```
+
+`profileContext` 由宿主在根上下文 `provide`（`{ name, dir, patchPath, startedBundles, home, … }`），
+`dsh-hmr` 和 `dsh-settings` 都这么取，所以插件拿得到。`profileDir()` 的顺序变成
+「宿主的目录 → 从本包向上找声明了 `dsh.profile.bundles` 的 manifest」，
+宿主给的路径若已经没有 manifest 就**不认**（切换 profile 的过程中不能把旧路径当答案）。
+`test/e2e.mjs` / `test/run.mjs` / `test/provider-owned.mjs` 三处跟着改用 `setProfileRoot()`。
+
+### 发布包只带运行时文件
+
+`files` 去掉了 `test/`。测试里有 `child_process`、`eval`、动态 import 和读盘，它们不属于
+发布包，被扫进来只会让审阅者多读 20 个与运行无关的文件。运行面从 39 个源文件降到 33 个。
+
+### 版本门槛
+
+`engines.dsh: ">=0.2.1-rc.5"`：0.2.1-rc.5 是实测基线。没有猜 0.2.2——`0.2.2-alpha.2` /
+`alpha.3` / `rc.1` 都还没在真实 profile 里跑过，所以本文件不写它们兼容（商店的
+`dshReleaseCompatibility` 会把范围覆盖但没逐版本记录的版本显示成「待验证」，那是准确状态）。
+
+### 明确没做
+
+- 不用拼接字符串、间接读取或条件分支去骗过静态扫描——那样只是把信号藏起来。
+- 不删 `lib/bridge.js` 的 `node:net` 与设置页的 `fetch(`：它们是真的（本机 socket 地址、
+  同源只读路由），删掉要改动工作方式，而信号本身没有说错。
+- 不声明 `0.2.2` 兼容：需要一个一次性 profile 实跑一遍才敢写。
+
+### 复核方式
+
+`node test/all.mjs` 五套件全过；用商店的 `fixed-source-review` 在同一棵固定树上复跑，
+原因从 7 条降到 2 条（只剩 files / network 两条能力信号，即上面「已知例外」那两处），
+安全扫描 verdict 从 `warn` 变 `pass`。
 
 ## 0.9.0 的改动
 

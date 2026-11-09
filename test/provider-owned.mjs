@@ -26,7 +26,8 @@ const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z
 const PKG = path.dirname(HERE);
 const at = (relative) => pathToFileURL(path.join(PKG, relative)).href;
 
-process.env.DSH_PROFILE_DIR = path.join(os.tmpdir(), "dsh-tool-gate-provider-owned");
+const { setProfileRoot } = await import(at("lib/tool-scan.js"));
+setProfileRoot(path.join(os.tmpdir(), "dsh-tool-gate-provider-owned"));
 
 const { Config } = await import(at("lib/config.js"));
 const plugin = await import(at("lib/index.js"));
