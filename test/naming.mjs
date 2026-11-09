@@ -380,6 +380,24 @@ const DIGITS = /[0-9]/;
   assert.equal(restated.repairs.get("gh_pr_list").pkg, "@perrylink/dsh-github");
   assert.equal(staleEntry.identity.confidence, "low", "and the low-confidence entry is why");
 
+  // R-d — a stale table entry whose package is still installed. Not proof of
+  // declaration (a package may publish only build output), but no longer a blind
+  // guess: `low` becomes `medium` and the family stops crying wolf.
+  const stillHere = attr.verifyAttribution({
+    entries: [at("hindsight_reflect", "@vectorize-io/hindsight-coding-agents", { source: "static-table" })],
+    evidence: { packages: ["@vectorize-io/hindsight-coding-agents"], declared: new Map(), prefixes: new Map() },
+  });
+  assert.equal(stillHere.repairs.get("hindsight_reflect").confidence, "medium");
+  assert.equal(stillHere.repairs.get("hindsight_reflect").source, "table+installed");
+  assert.equal(stillHere.diagnostics.length, 0, "a corroborated guess is not a warning");
+
+  // …but a table entry whose package is *gone* stays a guess, so D6 keeps firing.
+  const vanished = attr.verifyAttribution({
+    entries: [at("hindsight_reflect", "dsh-uninstalled-thing", { source: "static-table" })],
+    evidence: { packages: ["dsh-something-else"] },
+  });
+  assert.equal(vanished.repairs.size, 0, "an absent package corroborates nothing");
+
   // A healthy entry produces nothing at all.
   const clean = attr.verifyAttribution({
     entries: [at("alpha_one", "dsh-alpha", { source: "declared" })],
