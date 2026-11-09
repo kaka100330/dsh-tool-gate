@@ -356,6 +356,30 @@ const DIGITS = /[0-9]/;
   assert.deepEqual(conflict.conflicts[0], { name: "weird", owner: "pkg-a", claimedBy: "pkg-b" });
   assert.equal(conflict.diagnostics[0].code, "D2");
 
+  // R-b2 — a name nobody could place, but which a package's own source declares.
+  // This is the cold-start shape: the tool registered before this plugin mounted,
+  // so the registry answers "unknown" and only the profile can say who owns it.
+  const unknownEntry = {
+    name: "gh_pr_list",
+    identity: attr.makeIdentity({ pkg: "<unknown>", source: "unknown" }),
+  };
+  const byDeclaration = attr.verifyAttribution({
+    entries: [unknownEntry],
+    evidence: { declared: new Map([["gh_pr_list", "@perrylink/dsh-github"]]) },
+  });
+  assert.equal(byDeclaration.repairs.get("gh_pr_list").pkg, "@perrylink/dsh-github");
+  assert.equal(byDeclaration.repairs.get("gh_pr_list").confidence, "high");
+  assert.equal(byDeclaration.diagnostics.length, 0, "a repair is not a warning");
+
+  // …and a stale table entry is the same kind of guess: the declaration replaces it.
+  const staleEntry = at("gh_pr_list", "dsh-old-github", { source: "static-table" });
+  const restated = attr.verifyAttribution({
+    entries: [staleEntry],
+    evidence: { declared: new Map([["gh_pr_list", "@perrylink/dsh-github"]]) },
+  });
+  assert.equal(restated.repairs.get("gh_pr_list").pkg, "@perrylink/dsh-github");
+  assert.equal(staleEntry.identity.confidence, "low", "and the low-confidence entry is why");
+
   // A healthy entry produces nothing at all.
   const clean = attr.verifyAttribution({
     entries: [at("alpha_one", "dsh-alpha", { source: "declared" })],

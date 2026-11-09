@@ -404,6 +404,13 @@ function createHost(options = {}) {
  */
 const FIXTURE_ROOT = path.join(os.tmpdir(), "dsh-tool-gate-fixtures");
 const FIXTURE_MODULES = path.join(FIXTURE_ROOT, "node_modules");
+// Start from an empty tree. The fixture profile lives in the temp directory and
+// therefore survives between runs, while the scan reads it as the *profile*: a
+// `tools.js` listing written by an older run stays authoritative, and after a
+// table entry moved from one stand-in package to another both packages declared
+// the same name — the scan answered with whichever it met first, and the result
+// depended on what the previous run had left behind.
+fs.rmSync(FIXTURE_ROOT, { recursive: true, force: true });
 const fixtureModules = new Map();
 const fixtureBundles = new Set();
 
@@ -453,6 +460,12 @@ const TOOL_PACKAGE = {
   workflow: "@deepseek-ai/dsh-tool-workflow", // resident: defines no family
   video_probe: "dsh-video-storyboard",
   mcp_connector_status: "dsh-mcp-connector",
+  // `dsh-ops` publishes every native replacement under one `ops_` prefix, so the
+  // fixture has to say that too. Left to the catch-all it claimed `ops_bash` for
+  // itself, and a declaration beats a table: the tool stopped being resident and
+  // the freeze dropped it — the fixture was lying about a name whose owner is
+  // the one package the prefix rule exists for.
+  ops_bash: "dsh-ops",
 };
 const MISC_PACKAGE = "dsh-e2e-misc";
 
@@ -1170,6 +1183,18 @@ const plain = (config) => {
         ungrouped.residentCount,
         ungrouped.toolCount,
         `${ungrouped.package}: "no-collapsible-members" means every tool is resident`,
+      );
+    }
+    // A row may not accuse the attribution of a package whose tools are simply
+    // resident: "there is nothing to collapse here" is a fact about the tools and
+    // wins over "our bookkeeping is unsure". The old order reported `dsh-ops`
+    // (all `ops_*` resident) and `billion-context` (all context tools resident) as
+    // 归属异常, which reads as a defect in the user's install.
+    if (ungrouped.reason === "misattributed") {
+      assert.equal(
+        ungrouped.residentCount < ungrouped.toolCount,
+        true,
+        `${ungrouped.package}: residency is a fact and must be reported before suspicion`,
       );
     }
     assert.equal(ungrouped.enabled, null, `${ungrouped.package} offers no switch`);
